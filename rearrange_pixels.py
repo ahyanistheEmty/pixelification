@@ -85,123 +85,48 @@ def main():
 
     src_s = cv2.resize(img_src, (dw, dh))
     tgt_s = cv2.resize(img_tgt, (dw, dh))
-    out_s = cv2.resize(output_img, (dw, dh))
 
-    title_h = 34
     label_h = 22
-    gap = 3
-    cw = dw * 3
-    ch = title_h + gap + dh + gap
-    canvas = np.full((ch, cw, 3), 20, dtype=np.uint8)
-    content_y = title_h + gap
+    canvas = np.full((dh + label_h, dw * 3, 3), 32, dtype=np.uint8)
+    canvas[label_h:, :dw] = src_s
+    canvas[label_h:, dw:2 * dw] = tgt_s
+    rec_region = canvas[label_h:, 2 * dw:3 * dw]
+
     font = cv2.FONT_HERSHEY_SIMPLEX
-
-    # ----- Title bar -----
-    cv2.rectangle(canvas, (0, 0), (cw, title_h), (14, 14, 14), -1)
-    cv2.rectangle(canvas, (0, title_h - 3), (cw, title_h), (0, 200, 120), -1)
-    cv2.putText(canvas, "  >>  Pixel Rearrangement",
-                (8, title_h - 10), font, 0.55, (0, 200, 120), 2)
-    cv2.putText(canvas, f"{w}x{h}",
-                (cw - 140, title_h - 10), font, 0.45, (140, 140, 140), 1)
-
-    # ----- Panel backgrounds & labels -----
-    canvas[content_y:content_y + dh, :dw] = src_s
-    canvas[content_y:content_y + dh, dw:2 * dw] = tgt_s
-    rec_region = canvas[content_y:content_y + dh, 2 * dw:3 * dw]
-
     for label, xo in [("Source", 0), ("Target", dw), ("Reconstruction", 2 * dw)]:
-        cv2.rectangle(canvas, (xo, content_y), (xo + dw, content_y + label_h), (0, 0, 0), -1)
-        cv2.putText(canvas, label, (xo + 6, content_y + 16), font, 0.45, (200, 200, 200), 1)
+        cv2.rectangle(canvas, (xo, 0), (xo + dw, label_h), (0, 0, 0), -1)
+        cv2.putText(canvas, label, (xo + 6, 16), font, 0.45, (200, 200, 200), 1)
 
     wn = "Pixel Rearrangement  (ESC/q  anytime  to  quit)"
-
-    def draw_progress(pct, text=""):
-        cv2.rectangle(canvas, (cw - 180, 0), (cw, title_h), (14, 14, 14), -1)
-        if text:
-            cv2.putText(canvas, text, (cw - 172, title_h - 10), font, 0.5, (0, 200, 120), 2)
-        else:
-            cv2.putText(canvas, f"{pct}%", (cw - 160, title_h - 10), font, 0.5, (0, 200, 120), 2)
-        bw = int(80 * pct / 100)
-        cv2.rectangle(canvas, (cw - 172, title_h - 20), (cw - 172 + bw, title_h - 17), (0, 200, 120), -1)
-        cv2.rectangle(canvas, (cw - 172, title_h - 20), (cw - 92, title_h - 17), (60, 60, 60), 1)
-
     cv2.imshow(wn, canvas)
-    if cv2.waitKey(400) & 0xFF in (27, ord("q")):
-        cv2.destroyAllWindows()
-        return
+    cv2.waitKey(300)
 
-    # ----- Tile-sliding animation -----
-    tile_size = max(8, min(24, int(np.sqrt(dw * dh / 180))))
-    tile_h = dh // tile_size
-    tile_w = dw // tile_size
+    # ----- Per-pixel swarm animation -----
+    total = h * w
+    rng = np.random.default_rng()
 
-    dest_lookup = np.empty(h * w, dtype=np.int32)
-    dest_lookup[src_order] = tgt_order
-    dest_map = dest_lookup.reshape(h, w)
+    src_flat = img_src.reshape(-1, 3)
 
-    dest_x_full = (dest_map % w).astype(np.float32) * (dw / w)
-    dest_y_full = (dest_map // w).astype(np.float32) * (dh / h)
+    # For each target position: which source pixel colour ends up there
+    rearranged = np.empty((total, 3), dtype=np.uint8)
+    rearranged[tgt_order] = src_flat[src_order]
 
-    dest_x_small = cv2.resize(dest_x_full, (dw, dh), interpolation=cv2.INTER_NEAREST)
-    dest_y_small = cv2.resize(dest_y_full, (dw, dh), interpolation=cv2.INTER_NEAREST)
+    # Each output position transitions independently at a random time
+    transition_times = rng.random(total)
 
-    tile_dest_x = np.zeros((tile_h, tile_w), dtype=np.float32)
-    tile_dest_y = np.zeros((tile_h, tile_w), dtype=np.float32)
-    for ty in range(tile_h):
-        y0 = ty * tile_size
-        y1 = min(y0 + tile_size, dh)
-        for tx in range(tile_w):
-            x0 = tx * tile_size
-            x1 = min(x0 + tile_size, dw)
-            tile_dest_x[ty, tx] = dest_x_small[y0:y1, x0:x1].mean()
-            tile_dest_y[ty, tx] = dest_y_small[y0:y1, x0:x1].mean()
-
-    num_frames = 40
-    frames = []
+    num_frames = 60
     for fi in range(num_frames):
-        t_raw = (fi + 1) / num_frames
-        ts = t_raw * t_raw * (3 - 2 * t_raw)
-        frame = np.full((dh, dw, 3), 24, dtype=np.uint8)
+        frac = (fi + 1) / num_frames
+        mask = transition_times < frac
 
-        for ty in range(tile_h):
-            y0 = ty * tile_size
-            y1 = min(y0 + tile_size, dh)
-            for tx in range(tile_w):
-                x0 = tx * tile_size
-                x1 = min(x0 + tile_size, dw)
-                tile = src_s[y0:y1, x0:x1]
-                th_act, tw_act = tile.shape[:2]
-
-                cx = int(round(x0 * (1 - ts) + tile_dest_x[ty, tx] * ts))
-                cy = int(round(y0 * (1 - ts) + tile_dest_y[ty, tx] * ts))
-
-                if cx < dw and cy < dh:
-                    cx1 = min(cx + tw_act, dw)
-                    cy1 = min(cy + th_act, dh)
-                    if cx1 > cx and cy1 > cy:
-                        frame[cy:cy1, cx:cx1] = tile[:(cy1 - cy), :(cx1 - cx)]
-        frames.append(frame)
-
-    for fi, frame in enumerate(frames):
-        rec_region[:] = frame
-        draw_progress(int((fi + 1) / num_frames * 100))
+        frame = np.where(mask[:, None], rearranged, src_flat)
+        rec_region[:] = cv2.resize(frame.reshape(h, w, 3), (dw, dh))
         cv2.imshow(wn, canvas)
-        if cv2.waitKey(20) & 0xFF in (27, ord("q")):
+        if cv2.waitKey(25) & 0xFF in (27, ord("q")):
             break
     else:
-        for di in range(12):
-            a = (di + 1) / 12.0
-            blended = cv2.addWeighted(frames[-1], 1 - a, out_s, a, 0)
-            rec_region[:] = blended
-            draw_progress(0, "refine")
-            cv2.imshow(wn, canvas)
-            if cv2.waitKey(25) & 0xFF in (27, ord("q")):
-                break
-        else:
-            rec_region[:] = out_s
-
-    draw_progress(0, "Done")
-    cv2.imshow(wn, canvas)
+        rec_region[:] = cv2.resize(rearranged.reshape(h, w, 3), (dw, dh))
+        cv2.imshow(wn, canvas)
 
     cv2.waitKey(0)
     cv2.destroyAllWindows()
