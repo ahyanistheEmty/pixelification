@@ -171,36 +171,31 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         out[t_order] = img_src.reshape(-1, 3)[s_order]
         out_img = out.reshape(h, w, 3)
 
-        # ── Display setup (full-screen aware) ──
+        # ── Display setup (screen-resolution canvas) ──
         try:
             import ctypes
             sw = ctypes.windll.user32.GetSystemMetrics(0)
             sh = ctypes.windll.user32.GetSystemMetrics(1)
         except Exception:
             sw, sh = 1920, 1080
-        pw = sw * 85 // 100 // 3                     # panel width
-        ph = sh * 85 // 100                          # panel height
-        sc = min(pw / w, ph / h)                   # as large as possible, no crop
+        canvas = np.full((sh, sw, 3), 32, dtype=np.uint8)
+
+        label_h = 22
+        pw = sw // 3                                 # panel width (equal thirds)
+        ph = sh - label_h                            # panel height
+        sc = min(pw / w, ph / h)                     # as large as possible, no crop
         iw, ih = max(int(w * sc), 1), max(int(h * sc), 1)
 
         src_s = cv2.resize(img_src, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
         tgt_s = cv2.resize(img_tgt, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
 
-        # Layout: 3 panels, content centered (void space fills the rest)
-        label_h = 22
-        canvas = np.full((ph + label_h, pw * 3, 3), 32, dtype=np.uint8)
+        cx = (pw - iw) // 2
+        cy = label_h + (ph - ih) // 2
+        canvas[cy:cy+ih, cx:cx+iw] = src_s
+        canvas[cy:cy+ih, pw+cx:pw+cx+iw] = tgt_s
 
-        src_x = (pw - iw) // 2
-        src_y = label_h + (ph - ih) // 2
-        canvas[src_y:src_y+ih, src_x:src_x+iw] = src_s
-
-        tgt_x = pw + (pw - iw) // 2
-        tgt_y = src_y
-        canvas[tgt_y:tgt_y+ih, tgt_x:tgt_x+iw] = tgt_s
-
-        rec_x = pw * 2 + (pw - iw) // 2
-        rec_y = src_y
-        rec_region = canvas[rec_y:rec_y+ih, rec_x:rec_x+iw]
+        rec_x = 2 * pw + cx
+        rec_region = canvas[cy:cy+ih, rec_x:rec_x+iw]
 
         font = cv2.FONT_HERSHEY_SIMPLEX
         for label, xo in [("Source", 0), ("Target", pw), ("Reconstruction", 2 * pw)]:
