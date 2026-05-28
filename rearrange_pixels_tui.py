@@ -171,7 +171,7 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         out[t_order] = img_src.reshape(-1, 3)[s_order]
         out_img = out.reshape(h, w, 3)
 
-        # ── OpenCV display ──
+        # ── Display setup ──
         max_d = 900
         sc = min(max_d / (w * 3), max_d / h, 1.0)
         dw, dh = int(w * sc), int(h * sc)
@@ -180,29 +180,132 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         tgt_s = cv2.resize(img_tgt, (dw, dh))
         out_s = cv2.resize(out_img, (dw, dh))
 
-        canvas = np.full((dh, dw * 3, 3), 32, dtype=np.uint8)
-        canvas[:, :dw] = src_s
-        canvas[:, dw:2*dw] = tgt_s
-
+        title_h = 34
+        label_h = 22
+        gap = 3
+        cw = dw * 3
+        ch = title_h + gap + dh + gap
+        canvas = np.full((ch, cw, 3), 20, dtype=np.uint8)
+        content_y = title_h + gap
         font = cv2.FONT_HERSHEY_SIMPLEX
-        for label, xo in [("Source", 0), ("Target", dw), ("Reconstruction", 2*dw)]:
-            cv2.rectangle(canvas, (xo, 0), (xo + dw, 22), (0, 0, 0), -1)
-            cv2.putText(canvas, label, (xo + 5, 16), font, 0.5, (255, 255, 255), 1)
 
-        wn = "Pixel Rearrangement (ESC/q → quit, any key → close)"
+        # ── Title bar ──
+        cv2.rectangle(canvas, (0, 0), (cw, title_h), (14, 14, 14), -1)
+        cv2.rectangle(canvas, (0, title_h - 3), (cw, title_h), (0, 200, 120), -1)
+
+        cv2.putText(canvas, "  >>  Pixel Rearrangement",
+                    (8, title_h - 10), font, 0.55, (0, 200, 120), 2)
+
+        dim_text = f"{w}x{h}"
+        cv2.putText(canvas, dim_text,
+                    (cw - 140, title_h - 10), font, 0.45, (140, 140, 140), 1)
+
+        # ── Panel backgrounds & labels ──
+        canvas[content_y:content_y + dh, :dw] = src_s
+        canvas[content_y:content_y + dh, dw:2 * dw] = tgt_s
+        rec_region = canvas[content_y:content_y + dh, 2 * dw:3 * dw]
+
+        panel_labels = [("Source", 0), ("Target", dw), ("Reconstruction", 2 * dw)]
+        for label, xo in panel_labels:
+            cv2.rectangle(canvas, (xo, content_y), (xo + dw, content_y + label_h), (0, 0, 0), -1)
+            cv2.putText(canvas, label, (xo + 6, content_y + 16), font, 0.45, (200, 200, 200), 1)
+
+        # Progress overlay on title bar (right side)
+        def draw_progress(pct, text=""):
+            cv2.rectangle(canvas, (cw - 180, 0), (cw, title_h), (14, 14, 14), -1)
+            if text:
+                cv2.putText(canvas, text, (cw - 172, title_h - 10),
+                            font, 0.5, (0, 200, 120), 2)
+            else:
+                cv2.putText(canvas, f"{pct}%", (cw - 160, title_h - 10),
+                            font, 0.5, (0, 200, 120), 2)
+            # thin progress bar
+            bw = int(80 * pct / 100)
+            cv2.rectangle(canvas, (cw - 172, title_h - 20),
+                          (cw - 172 + bw, title_h - 17), (0, 200, 120), -1)
+            cv2.rectangle(canvas, (cw - 172, title_h - 20),
+                          (cw - 92, title_h - 17), (60, 60, 60), 1)
+
+        wn = "Pixel Rearrangement  (ESC/q  anytime  to  quit)"
         cv2.imshow(wn, canvas)
-        cv2.waitKey(300)
+        cv2.waitKey(400)
 
-        delay = max(1, min(10, 500 // dh))
-        for y in range(dh):
-            canvas[y, 2*dw:3*dw] = out_s[y, :]
+        # ── Tile-sliding animation ──
+        tile_size = max(8, min(24, int(np.sqrt(dw * dh / 180))))
+        tile_h = dh // tile_size
+        tile_w = dw // tile_size
+
+        # Destination lookup: for each source pixel, where does it go?
+        dest_lookup = np.empty(h * w, dtype=np.int32)
+        dest_lookup[s_order] = t_order
+        dest_map = dest_lookup.reshape(h, w)
+
+        dest_x_full = (dest_map % w).astype(np.float32) * (dw / w)
+        dest_y_full = (dest_map // w).astype(np.float32) * (dh / h)
+
+        dest_x_small = cv2.resize(dest_x_full, (dw, dh), interpolation=cv2.INTER_NEAREST)
+        dest_y_small = cv2.resize(dest_y_full, (dw, dh), interpolation=cv2.INTER_NEAREST)
+
+        tile_dest_x = np.zeros((tile_h, tile_w), dtype=np.float32)
+        tile_dest_y = np.zeros((tile_h, tile_w), dtype=np.float32)
+        for ty in range(tile_h):
+            y0 = ty * tile_size
+            y1 = min(y0 + tile_size, dh)
+            for tx in range(tile_w):
+                x0 = tx * tile_size
+                x1 = min(x0 + tile_size, dw)
+                tile_dest_x[ty, tx] = dest_x_small[y0:y1, x0:x1].mean()
+                tile_dest_y[ty, tx] = dest_y_small[y0:y1, x0:x1].mean()
+
+        num_frames = 40
+        frames = []
+        for fi in range(num_frames):
+            t_raw = (fi + 1) / num_frames
+            ts = t_raw * t_raw * (3 - 2 * t_raw)  # smoothstep
+            frame = np.full((dh, dw, 3), 24, dtype=np.uint8)
+
+            for ty in range(tile_h):
+                y0 = ty * tile_size
+                y1 = min(y0 + tile_size, dh)
+                for tx in range(tile_w):
+                    x0 = tx * tile_size
+                    x1 = min(x0 + tile_size, dw)
+                    tile = src_s[y0:y1, x0:x1]
+                    th_act, tw_act = tile.shape[:2]
+
+                    cx = int(round(x0 * (1 - ts) + tile_dest_x[ty, tx] * ts))
+                    cy = int(round(y0 * (1 - ts) + tile_dest_y[ty, tx] * ts))
+
+                    if cx < dw and cy < dh:
+                        cx1 = min(cx + tw_act, dw)
+                        cy1 = min(cy + th_act, dh)
+                        if cx1 > cx and cy1 > cy:
+                            frame[cy:cy1, cx:cx1] = tile[:(cy1 - cy), :(cx1 - cx)]
+            frames.append(frame)
+
+        # Playback
+        for fi, frame in enumerate(frames):
+            rec_region[:] = frame
+            draw_progress(int((fi + 1) / num_frames * 100))
             cv2.imshow(wn, canvas)
-            if cv2.waitKey(delay) & 0xFF in (27, ord("q")):
+            if cv2.waitKey(20) & 0xFF in (27, ord("q")):
                 break
         else:
-            cv2.rectangle(canvas, (2*dw, dh-24), (2*dw+140, dh), (0, 0, 0), -1)
-            cv2.putText(canvas, "Complete!", (2*dw+8, dh-8), font, 0.55, (0, 220, 0), 1)
-            cv2.imshow(wn, canvas)
+            # Dissolve to pixel-perfect
+            for di in range(12):
+                a = (di + 1) / 12.0
+                blended = cv2.addWeighted(frames[-1], 1 - a, out_s, a, 0)
+                rec_region[:] = blended
+                draw_progress(0, "refine")
+                cv2.imshow(wn, canvas)
+                if cv2.waitKey(25) & 0xFF in (27, ord("q")):
+                    break
+            else:
+                rec_region[:] = out_s
+
+        # Final display
+        draw_progress(0, "Done")
+        cv2.imshow(wn, canvas)
 
         cv2.waitKey(0)
         cv2.destroyAllWindows()
