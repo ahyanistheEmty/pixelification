@@ -171,13 +171,20 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         out[t_order] = img_src.reshape(-1, 3)[s_order]
         out_img = out.reshape(h, w, 3)
 
-        # ── Display setup ──
-        max_d = 900
-        sc = min(max_d / (w * 3), max_d / h, 1.0)
+        # ── Display setup (full-screen aware) ──
+        try:
+            import ctypes
+            sw = ctypes.windll.user32.GetSystemMetrics(0)
+            sh = ctypes.windll.user32.GetSystemMetrics(1)
+        except Exception:
+            sw, sh = 1920, 1080
+        max_pw = sw * 85 // 100 // 3          # 85 % of width, ÷ 3 panels
+        max_ph = sh * 85 // 100               # 85 % of height
+        sc = min(max_pw / w, max_ph / h)
         dw, dh = int(w * sc), int(h * sc)
 
-        src_s = cv2.resize(img_src, (dw, dh))
-        tgt_s = cv2.resize(img_tgt, (dw, dh))
+        src_s = cv2.resize(img_src, (dw, dh), interpolation=cv2.INTER_LANCZOS4)
+        tgt_s = cv2.resize(img_tgt, (dw, dh), interpolation=cv2.INTER_LANCZOS4)
 
         label_h = 22
         canvas = np.full((dh + label_h, dw * 3, 3), 32, dtype=np.uint8)
@@ -201,10 +208,6 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         total = h * w
         forward = np.empty(total, dtype=np.int32)
         forward[s_order] = t_order
-
-        # Build a display-scale grid of source pixels
-        src_s = cv2.resize(img_src, (dw, dh))          # display-sized source
-        tgt_s = cv2.resize(img_tgt, (dw, dh))          # display-sized target
 
         # For each display pixel (dx, dy), the source pixel index it corresponds to
         s_idx_x = (np.arange(dw, dtype=np.float32) * w / dw).clip(0, w - 1).round().astype(np.int32)

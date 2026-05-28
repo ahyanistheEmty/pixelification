@@ -78,13 +78,20 @@ def main():
     output_flat[tgt_order] = src_flat[src_order]
     output_img = output_flat.reshape(h, w, 3)
 
-    # ----- Display setup -----
-    max_d = 900
-    sc = min(max_d / (w * 3), max_d / h, 1.0)
+    # ----- Display setup (full-screen aware) -----
+    try:
+        import ctypes
+        sw = ctypes.windll.user32.GetSystemMetrics(0)
+        sh = ctypes.windll.user32.GetSystemMetrics(1)
+    except Exception:
+        sw, sh = 1920, 1080
+    max_pw = sw * 85 // 100 // 3          # 85 % of width, ÷ 3 panels
+    max_ph = sh * 85 // 100               # 85 % of height
+    sc = min(max_pw / w, max_ph / h)
     dw, dh = int(w * sc), int(h * sc)
 
-    src_s = cv2.resize(img_src, (dw, dh))
-    tgt_s = cv2.resize(img_tgt, (dw, dh))
+    src_s = cv2.resize(img_src, (dw, dh), interpolation=cv2.INTER_LANCZOS4)
+    tgt_s = cv2.resize(img_tgt, (dw, dh), interpolation=cv2.INTER_LANCZOS4)
 
     label_h = 22
     canvas = np.full((dh + label_h, dw * 3, 3), 32, dtype=np.uint8)
