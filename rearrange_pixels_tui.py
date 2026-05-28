@@ -204,7 +204,7 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
 
         wn = "Pixel Rearrangement  (ESC/q  anytime  to  quit)"
         cv2.namedWindow(wn, cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty(wn, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.resizeWindow(wn, sw, sh)
         cv2.imshow(wn, canvas)
         cv2.waitKey(300)
 
