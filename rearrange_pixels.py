@@ -98,6 +98,8 @@ def main():
         cv2.putText(canvas, label, (xo + 6, 16), font, 0.45, (200, 200, 200), 1)
 
     wn = "Pixel Rearrangement  (ESC/q  anytime  to  quit)"
+    cv2.namedWindow(wn, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(wn, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     cv2.imshow(wn, canvas)
     cv2.waitKey(300)
 
