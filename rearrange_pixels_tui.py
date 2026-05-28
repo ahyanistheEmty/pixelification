@@ -194,31 +194,61 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         cv2.imshow(wn, canvas)
         cv2.waitKey(300)
 
-        # ── Per-pixel swarm animation ──
+        # ── True pixel-sliding animation ──
+        # Forward map: for each source pixel, which target position it goes to
         total = h * w
-        rng = np.random.default_rng()
+        forward = np.empty(total, dtype=np.int32)
+        forward[s_order] = t_order
 
-        src_flat = img_src.reshape(-1, 3)
+        # Build a display-scale grid of source pixels
+        src_s = cv2.resize(img_src, (dw, dh))          # display-sized source
+        tgt_s = cv2.resize(img_tgt, (dw, dh))          # display-sized target
 
-        # For each target position: which source pixel colour ends up there
-        rearranged = np.empty((total, 3), dtype=np.uint8)
-        rearranged[t_order] = src_flat[s_order]
+        # For each display pixel (dx, dy), the source pixel index it corresponds to
+        s_idx_x = (np.arange(dw, dtype=np.float32) * w / dw).clip(0, w - 1).round().astype(np.int32)
+        s_idx_y = (np.arange(dh, dtype=np.float32) * h / dh).clip(0, h - 1).round().astype(np.int32)
+        gx, gy = np.meshgrid(s_idx_x, s_idx_y)         # source indices at each display pixel
+        src_lin = gy * w + gx                           # linear source index
 
-        # Each output position transitions independently at a random time
-        transition_times = rng.random(total)
+        # Where does that source pixel go in the target?
+        tgt_lin = forward[src_lin]                     # linear target index
+        tgt_dx = (tgt_lin % w).astype(np.float32) * sc  # target position in display coords
+        tgt_dy = (tgt_lin // w).astype(np.float32) * sc
+
+        # Display coordinates of each source pixel (its starting position)
+        src_dx = gx.astype(np.float32) * sc
+        src_dy = gy.astype(np.float32) * sc
+
+        # Colors of the source pixels (what each pixel looks like throughout its journey)
+        colors = src_s.reshape(-1, 3).astype(np.float32)
 
         num_frames = 60
         for fi in range(num_frames):
-            frac = (fi + 1) / num_frames
-            mask = transition_times < frac
+            t = (fi + 1) / num_frames
 
-            frame = np.where(mask[:, None], rearranged, src_flat)
-            rec_region[:] = cv2.resize(frame.reshape(h, w, 3), (dw, dh))
+            # Each pixel's current position: linearly interpolated
+            curr_x = np.clip((1 - t) * src_dx.ravel() + t * tgt_dx.ravel(), 0, dw - 1)
+            curr_y = np.clip((1 - t) * src_dy.ravel() + t * tgt_dy.ravel(), 0, dh - 1)
+            rx = np.round(curr_x).astype(np.int32)
+            ry = np.round(curr_y).astype(np.int32)
+
+            # Scatter: add each pixel's colour to its current position
+            accum = np.zeros((dh, dw, 3), dtype=np.float32)
+            cnt = np.zeros((dh, dw), dtype=np.float32)
+            np.add.at(accum, (ry, rx), colors)
+            np.add.at(cnt, (ry, rx), 1.0)
+            mask = cnt > 0
+            accum[mask] /= cnt[mask, None]
+
+            rec_region[:] = accum.astype(np.uint8)
             cv2.imshow(wn, canvas)
             if cv2.waitKey(25) & 0xFF in (27, ord("q")):
                 break
         else:
-            rec_region[:] = cv2.resize(rearranged.reshape(h, w, 3), (dw, dh))
+            rec_region[:] = cv2.resize(
+                img_src.reshape(-1, 3)[s_order][t_order.argsort()].reshape(h, w, 3),
+                (dw, dh),
+            )
             cv2.imshow(wn, canvas)
 
         cv2.waitKey(0)
