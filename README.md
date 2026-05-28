@@ -6,9 +6,45 @@ No new pixels are created. Every pixel in the output comes from the source image
 
 ## How it works
 
-1. **Sort pixels** by (luminance, hue, saturation) — both source and target
-2. **Map by rank** — the *n*th darkest source pixel maps to the *n*th darkest target position
-3. **Animate** — each display pixel slides from its source position to its target position via linear interpolation, rendered with a per-pixel scatter (`np.add.at`)
+```mermaid
+flowchart LR
+    A[Source Image] --> C[Color sort<br/>lexsort by<br/>lum→hue→sat]
+    B[Target Image] --> D[Color sort<br/>lexsort by<br/>lum→hue→sat]
+    C --> E["s_order[i]"]
+    D --> F["t_order[i]"]
+    E --> G["forward[s_order] = t_order"]
+    F --> G
+    G --> H[Per-pixel<br/>position lerp]
+    H --> I[Scatter render<br/>np.add.at]
+    I --> J[60 frames<br/>slide animation]
+```
+
+1. **Sort by colour** — every pixel in both images is sorted by luminance, then hue, then saturation. The darkest source pixel gets rank 0, the lightest gets rank *N*−1. Same for the target.
+
+2. **Map by rank** — a source pixel with rank *i* maps to the target position with rank *i*. This is the optimal transport: the *i*th darkest pixel in the source ends up where the *i*th darkest pixel was in the target.
+
+```
+   Source pixels (sorted)         Target positions (sorted)
+   ┌─────────────────────┐       ┌─────────────────────┐
+   │  rank 0 (darkest)   │──────→│  rank 0             │
+   │  rank 1             │──────→│  rank 1             │
+   │  rank 2             │──────→│  rank 2             │
+   │  ...                │       │  ...                │
+   │  rank N−1 (lightest)│──────→│  rank N−1           │
+   └─────────────────────┘       └─────────────────────┘
+```
+
+3. **Animate** — each pixel slides from its original position to its mapped position over 60 frames using linear interpolation. All pixels move simultaneously. When multiple pixels land on the same display cell, their colours are averaged.
+
+```
+   Frame 0               Frame 30              Frame 60
+   ┌────────┐            ┌────────┐            ┌────────┐
+   │• •     │            │  ••    │            │   ••   │
+   │  ••    │  ───────→  │ • ••   │  ───────→  │ ••     │
+   │   • •  │    lerp    │    • • │    lerp    │ •  •   │
+   └────────┘            └────────┘            └────────┘
+   source positions      midway                target positions
+```
 
 ## Usage
 
