@@ -87,7 +87,7 @@ def main():
         sw, sh = 1920, 1080
     pw = sw * 85 // 100 // 3                     # panel width
     ph = sh * 85 // 100                          # panel height
-    sc = min(pw / w, ph / h, 1.0)               # fit, don't zoom
+    sc = min(pw / w, ph / h)                   # as large as possible, no crop
     iw, ih = max(int(w * sc), 1), max(int(h * sc), 1)
 
     src_s = cv2.resize(img_src, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
