@@ -178,23 +178,33 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
             sh = ctypes.windll.user32.GetSystemMetrics(1)
         except Exception:
             sw, sh = 1920, 1080
-        max_pw = sw * 85 // 100 // 3          # 85 % of width, ÷ 3 panels
-        max_ph = sh * 85 // 100               # 85 % of height
-        sc = min(max_pw / w, max_ph / h)
-        dw, dh = int(w * sc), int(h * sc)
+        pw = sw * 85 // 100 // 3                     # panel width
+        ph = sh * 85 // 100                          # panel height
+        sc = min(pw / w, ph / h, 1.0)               # fit, don't zoom
+        iw, ih = max(int(w * sc), 1), max(int(h * sc), 1)
 
-        src_s = cv2.resize(img_src, (dw, dh), interpolation=cv2.INTER_LANCZOS4)
-        tgt_s = cv2.resize(img_tgt, (dw, dh), interpolation=cv2.INTER_LANCZOS4)
+        src_s = cv2.resize(img_src, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
+        tgt_s = cv2.resize(img_tgt, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
 
+        # Layout: 3 panels, content centered (void space fills the rest)
         label_h = 22
-        canvas = np.full((dh + label_h, dw * 3, 3), 32, dtype=np.uint8)
-        canvas[label_h:, :dw] = src_s
-        canvas[label_h:, dw:2 * dw] = tgt_s
-        rec_region = canvas[label_h:, 2 * dw:3 * dw]
+        canvas = np.full((ph + label_h, pw * 3, 3), 32, dtype=np.uint8)
+
+        src_x = (pw - iw) // 2
+        src_y = label_h + (ph - ih) // 2
+        canvas[src_y:src_y+ih, src_x:src_x+iw] = src_s
+
+        tgt_x = pw + (pw - iw) // 2
+        tgt_y = src_y
+        canvas[tgt_y:tgt_y+ih, tgt_x:tgt_x+iw] = tgt_s
+
+        rec_x = pw * 2 + (pw - iw) // 2
+        rec_y = src_y
+        rec_region = canvas[rec_y:rec_y+ih, rec_x:rec_x+iw]
 
         font = cv2.FONT_HERSHEY_SIMPLEX
-        for label, xo in [("Source", 0), ("Target", dw), ("Reconstruction", 2 * dw)]:
-            cv2.rectangle(canvas, (xo, 0), (xo + dw, label_h), (0, 0, 0), -1)
+        for label, xo in [("Source", 0), ("Target", pw), ("Reconstruction", 2 * pw)]:
+            cv2.rectangle(canvas, (xo, 0), (xo + pw, label_h), (0, 0, 0), -1)
             cv2.putText(canvas, label, (xo + 6, 16), font, 0.45, (200, 200, 200), 1)
 
         wn = "Pixel Rearrangement  (ESC/q  anytime  to  quit)"
@@ -204,42 +214,38 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         cv2.waitKey(300)
 
         # ── True pixel-sliding animation ──
-        # Forward map: for each source pixel, which target position it goes to
         total = h * w
         forward = np.empty(total, dtype=np.int32)
         forward[s_order] = t_order
 
-        # For each display pixel (dx, dy), the source pixel index it corresponds to
-        s_idx_x = (np.arange(dw, dtype=np.float32) * w / dw).clip(0, w - 1).round().astype(np.int32)
-        s_idx_y = (np.arange(dh, dtype=np.float32) * h / dh).clip(0, h - 1).round().astype(np.int32)
-        gx, gy = np.meshgrid(s_idx_x, s_idx_y)         # source indices at each display pixel
-        src_lin = gy * w + gx                           # linear source index
+        scx = iw / w
+        scy = ih / h
 
-        # Where does that source pixel go in the target?
-        tgt_lin = forward[src_lin]                     # linear target index
-        tgt_dx = (tgt_lin % w).astype(np.float32) * sc  # target position in display coords
-        tgt_dy = (tgt_lin // w).astype(np.float32) * sc
+        s_idx_x = (np.arange(iw, dtype=np.float32) * w / iw).clip(0, w - 1).round().astype(np.int32)
+        s_idx_y = (np.arange(ih, dtype=np.float32) * h / ih).clip(0, h - 1).round().astype(np.int32)
+        gx, gy = np.meshgrid(s_idx_x, s_idx_y)
+        src_lin = gy * w + gx
 
-        # Display coordinates of each source pixel (its starting position)
-        src_dx = gx.astype(np.float32) * sc
-        src_dy = gy.astype(np.float32) * sc
+        tgt_lin = forward[src_lin]
+        tgt_dx = (tgt_lin % w).astype(np.float32) * scx
+        tgt_dy = (tgt_lin // w).astype(np.float32) * scy
 
-        # Colors of the source pixels (what each pixel looks like throughout its journey)
+        src_dx = gx.astype(np.float32) * scx
+        src_dy = gy.astype(np.float32) * scy
+
         colors = src_s.reshape(-1, 3).astype(np.float32)
 
         num_frames = 60
         for fi in range(num_frames):
             t = (fi + 1) / num_frames
 
-            # Each pixel's current position: linearly interpolated
-            curr_x = np.clip((1 - t) * src_dx.ravel() + t * tgt_dx.ravel(), 0, dw - 1)
-            curr_y = np.clip((1 - t) * src_dy.ravel() + t * tgt_dy.ravel(), 0, dh - 1)
+            curr_x = np.clip((1 - t) * src_dx.ravel() + t * tgt_dx.ravel(), 0, iw - 1)
+            curr_y = np.clip((1 - t) * src_dy.ravel() + t * tgt_dy.ravel(), 0, ih - 1)
             rx = np.round(curr_x).astype(np.int32)
             ry = np.round(curr_y).astype(np.int32)
 
-            # Scatter: add each pixel's colour to its current position
-            accum = np.zeros((dh, dw, 3), dtype=np.float32)
-            cnt = np.zeros((dh, dw), dtype=np.float32)
+            accum = np.zeros((ih, iw, 3), dtype=np.float32)
+            cnt = np.zeros((ih, iw), dtype=np.float32)
             np.add.at(accum, (ry, rx), colors)
             np.add.at(cnt, (ry, rx), 1.0)
             mask = cnt > 0
@@ -252,7 +258,7 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         else:
             rec_region[:] = cv2.resize(
                 img_src.reshape(-1, 3)[s_order][t_order.argsort()].reshape(h, w, 3),
-                (dw, dh),
+                (iw, ih),
             )
             cv2.imshow(wn, canvas)
 
