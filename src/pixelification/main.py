@@ -48,6 +48,7 @@ def get_xp():
     return np
 
 def to_np(arr):
+    if arr is None: return None
     if HAS_NVIDIA and cp is not None and isinstance(arr, cp.ndarray):
         return arr.get()
     if HAS_APPLE_SILICON and mx is not None and isinstance(arr, mx.array):
@@ -56,10 +57,23 @@ def to_np(arr):
 
 def xp_lexsort(keys, xp):
     if HAS_APPLE_SILICON and xp is mx:
-        # MLX lexsort takes a list of arrays in reverse order of significance
-        # like numpy, but as a single argument.
         return mx.lexsort(list(keys))
     return xp.lexsort(keys)
+
+def xp_scatter_add(a, indices, updates, xp):
+    if xp is np:
+        np.add.at(a, indices, updates)
+    elif HAS_NVIDIA and xp is cp:
+        cp.scatter_add(a, indices, updates)
+    elif HAS_APPLE_SILICON and xp is mx:
+        # MLX scatter_add: indices should be a list/tuple of arrays
+        # For 2D indices (ry, rx), we need to handle it.
+        # However, for simplicity in the animation loop, we can use 
+        # a flat index if needed, or handle the MLX scatter signature.
+        # MLX expects indices to be a single array or tuple of arrays 
+        # representing the coordinates.
+        a[...] = mx.scatter_add(a, indices, updates)
+    return a
 
 # ── Styling ──────────────────────────────────────────────────────────
 
@@ -269,14 +283,13 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         xp = get_xp()
         s_l, s_h, s_s = compute_sort_keys(img_src, xp)
         t_l, t_h, t_s = compute_sort_keys(img_tgt, xp)
-        s_order = xp.lexsort((s_s, s_h, s_l))
-        t_order = xp.lexsort((t_s, t_h, t_l))
+        s_order = xp_lexsort((s_s, s_h, s_l), xp)
+        t_order = xp_lexsort((t_s, t_h, t_l), xp)
 
         out_flat = xp.empty_like(xp.array(img_src.reshape(-1, 3)), dtype=xp.uint8)
         out_flat[t_order] = xp.array(img_src.reshape(-1, 3))[s_order]
         out_img = out_flat.reshape(h, w, 3)
-        if xp is not np:
-            out_img = out_img.get()
+        out_img = to_np(out_img)
 
         sw, sh = get_screen_resolution()
         canvas = np.full((sh, sw, 3), 32, dtype=np.uint8)
@@ -345,19 +358,13 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
             accum = xp.zeros((ih, iw, 3), dtype=xp.float32)
             cnt = xp.zeros((ih, iw), dtype=xp.float32)
             
-            if xp is np:
-                np.add.at(accum, (ry, rx), colors)
-                np.add.at(cnt, (ry, rx), 1.0)
-            else:
-                xp.scatter_add(accum, (ry, rx), colors)
-                xp.scatter_add(cnt, (ry, rx), 1.0)
+            accum = xp_scatter_add(accum, (ry, rx), colors, xp)
+            cnt = xp_scatter_add(cnt, (ry, rx), 1.0, xp)
                 
             mask = cnt > 0
             accum[mask] /= cnt[mask, None]
 
-            res_frame = accum.astype(xp.uint8)
-            if xp is not np:
-                res_frame = res_frame.get()
+            res_frame = to_np(accum).astype(np.uint8)
             
             rec_region[:] = res_frame
             cv2.imshow(wn, canvas)
@@ -496,16 +503,15 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
 
             s_l, s_h, s_s = compute_sort_keys(src_frame, xp)
             t_l, t_h, t_s = compute_sort_keys(tgt_frame, xp)
-            s_order = xp.lexsort((s_s, s_h, s_l))
-            t_order = xp.lexsort((t_s, t_h, t_l))
+            s_order = xp_lexsort((s_s, s_h, s_l), xp)
+            t_order = xp_lexsort((t_s, t_h, t_l), xp)
 
             src_flat = xp.array(src_frame.reshape(-1, 3))
             out_flat = xp.empty_like(src_flat, dtype=xp.uint8)
             out_flat[t_order] = src_flat[s_order]
             out_frame = out_flat.reshape(out_h, out_w, 3)
             
-            if xp is not np:
-                out_frame = out_frame.get()
+            out_frame = to_np(out_frame)
 
             writer.write(out_frame)
 
