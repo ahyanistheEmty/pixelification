@@ -122,7 +122,7 @@ class State:
     status: str = "Ready"
     status_style: str = "status"
     info: str = ""
-    cursor: int = 0               # 0-3  →  source / target / run / quit
+    cursor: int = 0               # 0-4  →  source / target / run / reset / quit
     running: bool = False
     done: bool = False
 
@@ -130,6 +130,7 @@ class State:
         ("Select Source Image",   "choose the image whose pixels will be rearranged"),
         ("Select Target Image",   "choose the image whose layout will be approximated"),
         ("Run Rearrangement",     "execute the sort-based pixel-matching algorithm"),
+        ("Try Again",             "reset everything and start fresh"),
         ("Quit",                  "exit the application"),
     ]
 
@@ -311,13 +312,13 @@ class PixelTUI:
         @kb.add("up")
         def _(event):
             if not self.state.running:
-                self.state.cursor = (self.state.cursor - 1) % 4
+                self.state.cursor = (self.state.cursor - 1) % 5
                 self._invalidate()
 
         @kb.add("down")
         def _(event):
             if not self.state.running:
-                self.state.cursor = (self.state.cursor + 1) % 4
+                self.state.cursor = (self.state.cursor + 1) % 5
                 self._invalidate()
 
         @kb.add("enter")
@@ -325,7 +326,7 @@ class PixelTUI:
             if not self.state.running:
                 self._dispatch(self.state.cursor)
 
-        for key, idx in [("1", 0), ("2", 1), ("3", 2), ("4", 3)]:
+        for key, idx in [("1", 0), ("2", 1), ("3", 2), ("4", 3), ("5", 4)]:
             @kb.add(key)
             def _(event, idx=idx):
                 if not self.state.running:
@@ -348,7 +349,8 @@ class PixelTUI:
         {0: self._select_source,
          1: self._select_target,
          2: self._run,
-         3: self._quit}[idx]()
+         3: self._try_again,
+         4: self._quit}[idx]()
 
     # ── Actions ──────────────────────────────────────────────────
 
@@ -406,6 +408,17 @@ class PixelTUI:
 
         if self._app:
             asyncio.create_task(waiter())
+
+    def _try_again(self):
+        """Reset the state to start fresh."""
+        self.state.source = ""
+        self.state.target = ""
+        self.state.status = "Ready"
+        self.state.status_style = "status"
+        self.state.info = ""
+        self.state.done = False
+        self.state.cursor = 0
+        self._invalidate()
 
     def _refresh_info(self):
         parts = []
