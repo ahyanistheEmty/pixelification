@@ -46,11 +46,33 @@ flowchart LR
    source positions      midway                target positions
 ```
 
-## Usage
+## Installation & Usage
+
+### Using uv (Recommended)
 
 ```bash
-python rearrange_pixels_tui.py
+# Install from source
+uv tool install .
+
+# Or run directly
+uv run pixelification
 ```
+
+### From PyPI
+
+Once published, you can install it via:
+
+```bash
+pip install pixelification
+```
+
+Then run it:
+
+```bash
+pixelification
+```
+
+### Keyboard Controls
 
 A keyboard-navigated terminal interface opens. Use arrow keys to select images, press Enter to run.
 
@@ -73,6 +95,13 @@ Press `ESC` or `q` during the animation to quit.
 - NumPy
 - `prompt_toolkit`
 
+Cross-platform support is included for Windows and Linux. On Linux, ensure `tkinter` is installed (e.g., `sudo apt install python3-tk`) for the file dialog fallback.
+
+## Rust Component (Aster Browser)
+
+The codebase also contains a Rust-based Win32 application. This component is currently only supported on Windows.
+To build the Rust component (Windows only):
+
 ```bash
-pip install opencv-python numpy prompt_toolkit
+cargo build --release
 ```

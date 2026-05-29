@@ -1,0 +1,18 @@
+[project]
+name = "pixelification"
+version = "0.1.0"
+description = "Pixel Rearrangement Tool — Keyboard-Navigated Terminal UI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "prompt-toolkit>=3.0.0",
+    "opencv-python>=4.0.0",
+    "numpy>=1.20.0",
+]
+
+[project.scripts]
+pixelification = "pixelification.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

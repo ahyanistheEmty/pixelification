@@ -6,7 +6,7 @@ animate row-by-row in an OpenCV window. No new pixels are created; only
 existing pixels from the source image are reordered to match the target.
 
 Usage:
-    python rearrange_pixels_tui.py
+    pixelification
 """
 
 import asyncio
@@ -144,6 +144,32 @@ def compute_sort_keys(img):
     return lum, hsv[:, 0], hsv[:, 1]
 
 
+def get_screen_resolution():
+    """Attempt to get screen resolution across platforms."""
+    try:
+        import ctypes
+        sw = ctypes.windll.user32.GetSystemMetrics(0)
+        sh = ctypes.windll.user32.GetSystemMetrics(1)
+        if sw > 0 and sh > 0:
+            return sw, sh
+    except Exception:
+        pass
+    
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        root.destroy()
+        if sw > 0 and sh > 0:
+            return sw, sh
+    except Exception:
+        pass
+        
+    return 1920, 1080
+
+
 def rearrange(source_path: str, target_path: str, state: State) -> None:
     """Run the pixel-rearrangement algorithm and show the OpenCV window.
     Called from a background thread."""
@@ -172,12 +198,7 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         out_img = out.reshape(h, w, 3)
 
         # ── Display setup (screen-resolution canvas) ──
-        try:
-            import ctypes
-            sw = ctypes.windll.user32.GetSystemMetrics(0)
-            sh = ctypes.windll.user32.GetSystemMetrics(1)
-        except Exception:
-            sw, sh = 1920, 1080
+        sw, sh = get_screen_resolution()
         canvas = np.full((sh, sw, 3), 32, dtype=np.uint8)
 
         label_h = 22
@@ -500,7 +521,11 @@ class PixelTUI:
             self._quit()
 
 
+def main():
+    PixelTUI().run()
+
+
 # ── Entry Point ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    PixelTUI().run()
+    main()
