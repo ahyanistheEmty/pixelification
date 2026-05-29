@@ -21,9 +21,9 @@ name = "cupy-cuda12x"
 version = "14.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "cuda-pathfinder", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'linux') or (python_full_version < '3.11' and sys_platform == 'win32')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform == 'linux') or (python_full_version >= '3.11' and sys_platform == 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/a8/f005587c5161f45b24c2ce66b4678ced7c94caf1337ec9de48e02205e7c4/cupy_cuda12x-14.1.0-cp310-cp310-manylinux2014_aarch64.whl", hash = "sha256:9e85fce91ea1cc5898571c21d9dd01263c1490543197d093f3f907781fb0f2d3", size = 143787557, upload-time = "2026-05-23T01:09:39.375Z" },
@@ -252,7 +252,7 @@ wheels = [
 name = "pixelification"
 source = { editable = "." }
 dependencies = [
-    { name = "cupy-cuda12x" },
+    { name = "cupy-cuda12x", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -262,8 +262,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cupy-cuda12x", specifier = ">=14.1.0" },
-    { name = "cupy-cuda12x", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = ">=12.0.0" },
+    { name = "cupy-cuda12x", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = ">=14.1.0" },
     { name = "mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.10.0" },
     { name = "numpy", specifier = ">=1.20.0" },
     { name = "opencv-python", specifier = ">=4.0.0" },
