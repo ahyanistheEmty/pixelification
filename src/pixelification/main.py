@@ -1,18 +1,15 @@
 """
 Pixel Rearrangement Tool — Keyboard-Navigated Terminal UI
 
-Select images via a native file dialog, then watch the pixel rearrangement
-animate row-by-row in an OpenCV window. No new pixels are created; only
-existing pixels from the source image are reordered to match the target.
-
-Usage:
-    pixelification
+Rearrange image pixels or video frames via colour-sort optimal transport.
+OpenCV window shows the result (animation for images, playback for video).
 """
 
 import asyncio
 import cv2
 import numpy as np
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +27,7 @@ from prompt_toolkit.styles import Style
 
 STYLE = Style([
     ("title",         "bold #00d787"),
+    ("mode-label",    "bold #5f87ff"),
     ("path-label",    "bold #5f87ff"),
     ("path-value",    "#87afff"),
     ("path-empty",    "#585858 italic"),
@@ -47,16 +45,20 @@ STYLE = Style([
 
 # ── Native File Dialog ───────────────────────────────────────────────
 
-def _powershell_open_file(title: str) -> str | None:
-    """Open the native Windows file dialog via a temp PowerShell script.
-    Avoids command-line quoting issues with -Command."""
-    script = """Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object System.Windows.Forms.OpenFileDialog
-$f.Filter = "Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp)|*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp|All Files (*.*)|*.*"
-$f.FilterIndex = 1
-$f.RestoreDirectory = $true
-if ($f.ShowDialog() -eq "OK") { $f.FileName }
-"""
+def _powershell_open_file(title: str, file_type: str = "image") -> str | None:
+    filt = ("Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp)|"
+            "*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp|All Files (*.*)|*.*")
+    if file_type == "video":
+        filt = ("Video Files (*.mp4;*.avi;*.mov;*.mkv;*.webm)|"
+                "*.mp4;*.avi;*.mov;*.mkv;*.webm|All Files (*.*)|*.*")
+    script = (
+        'Add-Type -AssemblyName System.Windows.Forms\n'
+        '$f = New-Object System.Windows.Forms.OpenFileDialog\n'
+        f'$f.Filter = "{filt}"\n'
+        '$f.FilterIndex = 1\n'
+        '$f.RestoreDirectory = $true\n'
+        'if ($f.ShowDialog() -eq "OK") { $f.FileName }\n'
+    )
     tmp = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -81,20 +83,25 @@ if ($f.ShowDialog() -eq "OK") { $f.FileName }
                 pass
 
 
-def _tkinter_open_file(title: str) -> str | None:
-    """Fallback: open file dialog via tkinter."""
+def _tkinter_open_file(title: str, file_type: str = "image") -> str | None:
     try:
         import tkinter as tk
         from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        path = filedialog.askopenfilename(
-            parent=root, title=title,
-            filetypes=[
+        if file_type == "video":
+            filetypes = [
+                ("Video files", "*.mp4 *.avi *.mov *.mkv *.webm"),
+                ("All files",   "*.*"),
+            ]
+        else:
+            filetypes = [
                 ("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff *.gif *.webp"),
                 ("All files",   "*.*"),
-            ],
+            ]
+        path = filedialog.askopenfilename(
+            parent=root, title=title, filetypes=filetypes,
         )
         root.destroy()
         return path if path else None
@@ -102,14 +109,12 @@ def _tkinter_open_file(title: str) -> str | None:
         return None
 
 
-def select_file(title: str = "Select Image") -> str | None:
-    """Open a native file-selection dialog.  Uses PowerShell on Windows,
-    tkinter elsewhere.  Returns the selected path or *None* if cancelled."""
+def select_file(title: str = "Select File", file_type: str = "image") -> str | None:
     if os.name == "nt":
-        path = _powershell_open_file(title)
+        path = _powershell_open_file(title, file_type)
         if path:
             return path
-    path = _tkinter_open_file(title)
+    path = _tkinter_open_file(title, file_type)
     return path if path else None
 
 
@@ -117,23 +122,45 @@ def select_file(title: str = "Select Image") -> str | None:
 
 @dataclass
 class State:
+    screen: str = "main"        # "main" | "image" | "video"
     source: str = ""
     target: str = ""
     status: str = "Ready"
     status_style: str = "status"
     info: str = ""
-    cursor: int = 0               # 0-4  →  source / target / run / save / quit
+    cursor: int = 0
     running: bool = False
     done: bool = False
     result: np.ndarray | None = None
+    result_video_path: str = ""
 
-    MENU = [
+    MENU_MAIN = [
+        ("Rearrange Images", "sort pixels between two images"),
+        ("Rearrange Videos", "sort frames between two videos"),
+        ("Quit", "exit the application"),
+    ]
+
+    MENU_IMAGE = [
         ("Select Source Image",   "choose the image whose pixels will be rearranged"),
         ("Select Target Image",   "choose the image whose layout will be approximated"),
         ("Run Rearrangement",     "execute the sort-based pixel-matching algorithm"),
         ("Save Result Image",     "save the reconstructed image to disk"),
+        ("Back to Main Menu",     "return to mode selection"),
         ("Quit",                  "exit the application"),
     ]
+
+    MENU_VIDEO = [
+        ("Select Source Video",   "choose the source video file"),
+        ("Select Target Video",   "choose the target video file"),
+        ("Run Video Rearrangement", "rearrange all frames to match target"),
+        ("Save Result Video",     "save the rearranged video to disk"),
+        ("Back to Main Menu",     "return to mode selection"),
+        ("Quit",                  "exit the application"),
+    ]
+
+    @property
+    def menu(self):
+        return {"main": self.MENU_MAIN, "image": self.MENU_IMAGE, "video": self.MENU_VIDEO}[self.screen]
 
 
 # ── Rearrangement Engine ─────────────────────────────────────────────
@@ -147,7 +174,6 @@ def compute_sort_keys(img):
 
 
 def get_screen_resolution():
-    """Attempt to get screen resolution across platforms."""
     try:
         import ctypes
         sw = ctypes.windll.user32.GetSystemMetrics(0)
@@ -156,7 +182,7 @@ def get_screen_resolution():
             return sw, sh
     except Exception:
         pass
-    
+
     try:
         import tkinter as tk
         root = tk.Tk()
@@ -168,13 +194,11 @@ def get_screen_resolution():
             return sw, sh
     except Exception:
         pass
-        
+
     return 1920, 1080
 
 
 def rearrange(source_path: str, target_path: str, state: State) -> None:
-    """Run the pixel-rearrangement algorithm and show the OpenCV window.
-    Called from a background thread."""
     try:
         img_src = cv2.imread(source_path, cv2.IMREAD_COLOR)
         img_tgt = cv2.imread(target_path, cv2.IMREAD_COLOR)
@@ -189,7 +213,6 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         h, w = img_src.shape[:2]
         img_tgt = cv2.resize(img_tgt, (w, h))
 
-        # ── optimal transport via colour sorting ──
         s_l, s_h, s_s = compute_sort_keys(img_src)
         t_l, t_h, t_s = compute_sort_keys(img_tgt)
         s_order = np.lexsort((s_s, s_h, s_l))
@@ -199,14 +222,13 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         out[t_order] = img_src.reshape(-1, 3)[s_order]
         out_img = out.reshape(h, w, 3)
 
-        # ── Display setup (screen-resolution canvas) ──
         sw, sh = get_screen_resolution()
         canvas = np.full((sh, sw, 3), 32, dtype=np.uint8)
 
         label_h = 22
-        pw = sw // 3                                 # panel width (equal thirds)
-        ph = sh - label_h                            # panel height
-        sc = min(pw / w, ph / h)                     # as large as possible, no crop
+        pw = sw // 3
+        ph = sh - label_h
+        sc = min(pw / w, ph / h)
         iw, ih = max(int(w * sc), 1), max(int(h * sc), 1)
 
         src_s = cv2.resize(img_src, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
@@ -231,7 +253,6 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         cv2.imshow(wn, canvas)
         cv2.waitKey(300)
 
-        # ── True pixel-sliding animation ──
         total = h * w
         forward = np.empty(total, dtype=np.int32)
         forward[s_order] = t_order
@@ -296,6 +317,145 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         state.done = True
 
 
+def letterbox_pad(img, target_w, target_h):
+    h, w = img.shape[:2]
+    if w == target_w and h == target_h:
+        return img
+    scale = min(target_w / w, target_h / h)
+    new_w = max(int(w * scale), 1)
+    new_h = max(int(h * scale), 1)
+    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    x_off = (target_w - new_w) // 2
+    y_off = (target_h - new_h) // 2
+    canvas[y_off:y_off+new_h, x_off:x_off+new_w] = resized
+    return canvas
+
+
+def rearrange_video(source_path: str, target_path: str, state: State) -> None:
+    try:
+        cap_src = cv2.VideoCapture(source_path)
+        cap_tgt = cv2.VideoCapture(target_path)
+
+        if not cap_src.isOpened():
+            state.status = f"Can't open source video: {Path(source_path).name}"
+            state.status_style = "status-error"
+            return
+        if not cap_tgt.isOpened():
+            state.status = f"Can't open target video: {Path(target_path).name}"
+            state.status_style = "status-error"
+            return
+
+        total_src = int(cap_src.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_COUNT))
+        total = min(total_src, total_tgt)
+
+        if total == 0:
+            state.status = "One or both videos have no frames"
+            state.status_style = "status-error"
+            return
+
+        fps = cap_src.get(cv2.CAP_PROP_FPS)
+        w_src = int(cap_src.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h_src = int(cap_src.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        w_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        ar_src = w_src / h_src
+        ar_tgt = w_tgt / h_tgt
+        ar_diff = abs(ar_src - ar_tgt) > 0.01
+
+        if ar_diff:
+            if ar_src >= ar_tgt:
+                out_w, out_h = w_src, h_src
+                pad_src, pad_tgt = False, True
+            else:
+                out_w, out_h = w_tgt, h_tgt
+                pad_src, pad_tgt = True, False
+        else:
+            out_w, out_h = w_src, h_src
+            pad_src, pad_tgt = False, False
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(tmp_path, fourcc, fps, (out_w, out_h))
+
+        state.status = f"Video: processing 0/{total} frames"
+        state.status_style = "status-warn"
+
+        for i in range(total):
+            ret_src, src_frame = cap_src.read()
+            ret_tgt, tgt_frame = cap_tgt.read()
+            if not ret_src or not ret_tgt:
+                break
+
+            if pad_src:
+                src_frame = letterbox_pad(src_frame, out_w, out_h)
+            if pad_tgt:
+                tgt_frame = letterbox_pad(tgt_frame, out_w, out_h)
+            if not pad_src and not pad_tgt and tgt_frame.shape[:2] != src_frame.shape[:2]:
+                tgt_frame = cv2.resize(tgt_frame, (out_w, out_h))
+
+            s_l, s_h, s_s = compute_sort_keys(src_frame)
+            t_l, t_h, t_s = compute_sort_keys(tgt_frame)
+            s_order = np.lexsort((s_s, s_h, s_l))
+            t_order = np.lexsort((t_s, t_h, t_l))
+
+            out = np.empty_like(src_frame.reshape(-1, 3), dtype=np.uint8)
+            out[t_order] = src_frame.reshape(-1, 3)[s_order]
+            out_frame = out.reshape(out_h, out_w, 3)
+
+            writer.write(out_frame)
+
+            pct = (i + 1) / total * 100
+            bar_len = 20
+            filled = int(bar_len * (i + 1) / total)
+            bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+            state.status = f"Video: [{bar}] {pct:.1f}% ({i+1}/{total})"
+
+        cap_src.release()
+        cap_tgt.release()
+        writer.release()
+
+        state.result_video_path = tmp_path
+        state.done = True
+
+        state.status = "Video complete. Playing result..."
+        state.status_style = "status"
+        cv2.waitKey(500)
+
+        cap = cv2.VideoCapture(tmp_path)
+        wn = "Video Rearrangement Result  (ESC/q  anytime  to  quit)"
+        cv2.namedWindow(wn, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(wn, 1280, 720)
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+            cv2.imshow(wn, frame)
+            key = cv2.waitKey(30) & 0xFF
+            if key in (27, ord("q")):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+    except Exception as e:
+        state.status = f"Error: {e}"
+        state.status_style = "status-error"
+        if state.result_video_path and os.path.exists(state.result_video_path):
+            try: os.unlink(state.result_video_path)
+            except: pass
+            state.result_video_path = ""
+    finally:
+        state.running = False
+        state.done = True
+
+
 # ── TUI Application ──────────────────────────────────────────────────
 
 class PixelTUI:
@@ -315,13 +475,15 @@ class PixelTUI:
         @kb.add("up")
         def _(event):
             if not self.state.running:
-                self.state.cursor = (self.state.cursor - 1) % 5
+                n = len(self.state.menu)
+                self.state.cursor = (self.state.cursor - 1) % n
                 self._invalidate()
 
         @kb.add("down")
         def _(event):
             if not self.state.running:
-                self.state.cursor = (self.state.cursor + 1) % 5
+                n = len(self.state.menu)
+                self.state.cursor = (self.state.cursor + 1) % n
                 self._invalidate()
 
         @kb.add("enter")
@@ -329,12 +491,14 @@ class PixelTUI:
             if not self.state.running:
                 self._dispatch(self.state.cursor)
 
-        for key, idx in [("1", 0), ("2", 1), ("3", 2), ("4", 3), ("5", 4)]:
+        for key, idx in [("1", 0), ("2", 1), ("3", 2), ("4", 3), ("5", 4), ("6", 5)]:
             @kb.add(key)
             def _(event, idx=idx):
                 if not self.state.running:
-                    self.state.cursor = idx
-                    self._dispatch(idx)
+                    n = len(self.state.menu)
+                    if idx < n:
+                        self.state.cursor = idx
+                        self._dispatch(idx)
 
         @kb.add("escape")
         @kb.add("q")
@@ -349,16 +513,53 @@ class PixelTUI:
     # ── Dispatch ─────────────────────────────────────────────────
 
     def _dispatch(self, idx: int):
-        {0: self._select_source,
-         1: self._select_target,
-         2: self._run,
-         3: self._save_result,
-         4: self._quit}[idx]()
+        s = self.state.screen
+        if s == "main":
+            {0: self._enter_image_mode,
+             1: self._enter_video_mode,
+             2: self._quit}[idx]()
+        elif s == "image":
+            {0: self._select_source,
+             1: self._select_target,
+             2: self._run,
+             3: self._save_result,
+             4: self._back_to_main,
+             5: self._quit}[idx]()
+        elif s == "video":
+            {0: self._select_source_video,
+             1: self._select_target_video,
+             2: self._run_video,
+             3: self._save_result_video,
+             4: self._back_to_main,
+             5: self._quit}[idx]()
 
     # ── Actions ──────────────────────────────────────────────────
 
+    def _enter_image_mode(self):
+        self.state.screen = "image"
+        self.state.cursor = 0
+        self.state.status = "Select source and target images"
+        self.state.status_style = "status-info"
+        self._refresh_info()
+        self._invalidate()
+
+    def _enter_video_mode(self):
+        self.state.screen = "video"
+        self.state.cursor = 0
+        self.state.status = "Select source and target videos"
+        self.state.status_style = "status-info"
+        self._refresh_info()
+        self._invalidate()
+
+    def _back_to_main(self):
+        self.state.screen = "main"
+        self.state.cursor = 0
+        self.state.status = "Ready"
+        self.state.status_style = "status"
+        self._invalidate()
+
     def _select_source(self):
-        path = select_file("Select Source Image (pixels to rearrange)")
+        path = select_file("Select Source Image", "image")
         if path:
             self.state.source = path
             self._refresh_info()
@@ -370,7 +571,31 @@ class PixelTUI:
         self._invalidate()
 
     def _select_target(self):
-        path = select_file("Select Target Image (layout to approximate)")
+        path = select_file("Select Target Image", "image")
+        if path:
+            self.state.target = path
+            self._refresh_info()
+            self.state.status = f"Target: {Path(path).name}"
+            self.state.status_style = "status"
+        else:
+            self.state.status = "Selection cancelled"
+            self.state.status_style = "status-info"
+        self._invalidate()
+
+    def _select_source_video(self):
+        path = select_file("Select Source Video", "video")
+        if path:
+            self.state.source = path
+            self._refresh_info()
+            self.state.status = f"Source: {Path(path).name}"
+            self.state.status_style = "status"
+        else:
+            self.state.status = "Selection cancelled"
+            self.state.status_style = "status-info"
+        self._invalidate()
+
+    def _select_target_video(self):
+        path = select_file("Select Target Video", "video")
         if path:
             self.state.target = path
             self._refresh_info()
@@ -392,7 +617,7 @@ class PixelTUI:
         self.state.running = True
         self.state.done = False
         self.state.result = None
-        self.state.status = "Rearrangement running in OpenCV window…"
+        self.state.status = "Rearrangement running in OpenCV window\u2026"
         self.state.status_style = "status-warn"
         self._invalidate()
 
@@ -403,7 +628,42 @@ class PixelTUI:
         )
         t.start()
 
-        # Poll thread completion in the background
+        async def waiter():
+            while t.is_alive():
+                await asyncio.sleep(0.5)
+                self._invalidate()
+            self._invalidate()
+
+        if self._app:
+            asyncio.create_task(waiter())
+
+    def _run_video(self):
+        if not self.state.source:
+            self.state.status = "Select a source video first!"
+            self.state.status_style = "status-error"; self._invalidate(); return
+        if not self.state.target:
+            self.state.status = "Select a target video first!"
+            self.state.status_style = "status-error"; self._invalidate(); return
+
+        if self.state.result_video_path and os.path.exists(self.state.result_video_path):
+            try: os.unlink(self.state.result_video_path)
+            except: pass
+        self.state.result_video_path = ""
+
+        self.state.running = True
+        self.state.done = False
+        self.state.result = None
+        self.state.status = "Video rearrangement running\u2026"
+        self.state.status_style = "status-warn"
+        self._invalidate()
+
+        t = threading.Thread(
+            target=rearrange_video,
+            args=(self.state.source, self.state.target, self.state),
+            daemon=True,
+        )
+        t.start()
+
         async def waiter():
             while t.is_alive():
                 await asyncio.sleep(0.5)
@@ -414,25 +674,37 @@ class PixelTUI:
             asyncio.create_task(waiter())
 
     def _refresh_info(self):
+        s = self.state
         parts = []
-        for path in (self.state.source, self.state.target):
+        for path in (s.source, s.target):
             if not path:
                 continue
             try:
-                img = cv2.imread(path, cv2.IMREAD_COLOR)
-                if img is not None:
-                    h, w = img.shape[:2]
-                    kb = Path(path).stat().st_size / 1024
-                    parts.append(f"{Path(path).name}  {w}×{h}  ({kb:.0f} KB)")
+                if s.screen == "image":
+                    img = cv2.imread(path, cv2.IMREAD_COLOR)
+                    if img is not None:
+                        h, w = img.shape[:2]
+                        kb = Path(path).stat().st_size / 1024
+                        parts.append(f"{Path(path).name}  {w}\u00d7{h}  ({kb:.0f} KB)")
+                else:
+                    cap = cv2.VideoCapture(path)
+                    if cap.isOpened():
+                        total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                        vfps = cap.get(cv2.CAP_PROP_FPS)
+                        dur = total_f / vfps if vfps > 0 else 0
+                        vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        cap.release()
+                        parts.append(f"{Path(path).name}  {vw}\u00d7{vh}  {total_f}f  {dur:.1f}s")
             except Exception:
                 parts.append(Path(path).name)
-        if self.state.source and self.state.target:
+        if s.source and s.target:
             parts.append("Ready!")
-        self.state.info = "  |  ".join(parts) if parts else ""
+        s.info = "  |  ".join(parts) if parts else ""
 
     def _save_result(self):
         if self.state.result is None:
-            self.state.status = "No result to save — run rearrangement first!"
+            self.state.status = "No result to save \u2014 run rearrangement first!"
             self.state.status_style = "status-error"
             self._invalidate()
             return
@@ -446,8 +718,25 @@ class PixelTUI:
         self.state.status_style = "status"
         self._invalidate()
 
+    def _save_result_video(self):
+        src_stem = Path(self.state.source).stem
+        tgt_stem = Path(self.state.target).stem
+        out_name = f"rearranged_{src_stem}_from_{tgt_stem}.mp4"
+        out_path = Path.cwd() / out_name
+        if self.state.result_video_path and os.path.exists(self.state.result_video_path):
+            shutil.copy2(self.state.result_video_path, str(out_path))
+            self.state.status = f"Saved to {out_path}"
+            self.state.status_style = "status"
+        else:
+            self.state.status = "No result to save \u2014 run rearrangement first!"
+            self.state.status_style = "status-error"
+        self._invalidate()
+
     def _quit(self):
         cv2.destroyAllWindows()
+        if self.state.result_video_path and os.path.exists(self.state.result_video_path):
+            try: os.unlink(self.state.result_video_path)
+            except: pass
         if self._app:
             self._app.exit()
         sys.exit(0)
@@ -462,57 +751,76 @@ class PixelTUI:
             if text:
                 F.append((style, text))
 
-        # Header
-        push("bold #00d787", "  ■ Pixel Rearrangement Tool")
-        push("", "\n")
-        push("#3a3a3a", "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        push("", "\n")
+        if s.screen == "main":
+            push("bold #00d787", "  \u25a0 Pixel Rearrangement Tool")
+            push("", "\n\n")
 
-        # Source / Target paths
-        push("bold #5f87ff", "\n  Source:  ")
-        push("#87afff" if s.source else "#585858 italic",
-             s.source if s.source else "— not selected —")
+            for i, (label, desc) in enumerate(s.menu):
+                cursor = "\u25cf" if i == s.cursor else "\u25cb"
+                sel = i == s.cursor
+                st = "bold #000000 bg:#00d787" if sel else "bold #ffffff"
+                push(st, f"  {cursor} {label}  ")
+                push("", "  ")
+                push("#6c6c6c", f"{desc}\n")
 
-        push("bold #5f87ff", "\n  Target:  ")
-        push("#87afff" if s.target else "#585858 italic",
-             s.target if s.target else "— not selected —")
-
-        # Info line
-        if s.info:
+            push("", "\n")
+            push("#3a3a3a", "  " + "\u2501" * 55)
             push("", "\n  ")
-            push("#878787 italic", s.info)
 
-        # Menu divider
-        push("", "\n\n")
-        push("#3a3a3a", "  ───────────────────────────────────────────────────────────")
-        push("", "\n")
+            c = {"status": "#5faf5f", "status-error": "#ff5f5f",
+                 "status-warn": "#ffaf5f", "status-info": "#878787 italic"}
+            push(c.get(s.status_style, "#878787 italic"), s.status)
+            push("", "\n")
+            n = len(s.menu)
+            push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut  \u2022  q  quit")
+            push("", "\n")
+        else:
+            mode_label = "Image Mode" if s.screen == "image" else "Video Mode"
+            push("bold #00d787", f"  \u25a0 Pixel Rearrangement Tool")
+            push("bold #5f87ff", f"  \u2014  [ {mode_label} ]")
+            push("", "\n")
+            push("#3a3a3a", "  " + "\u2501" * 55)
+            push("", "\n")
+            push("bold #5f87ff", "\n  Source:  ")
+            push("#87afff" if s.source else "#585858 italic",
+                 s.source if s.source else "\u2014 not selected \u2014")
 
-        # Menu items
-        for i, (label, desc) in enumerate(State.MENU):
-            cursor = "●" if i == s.cursor else "○"
-            sel = i == s.cursor
-            disabled = (i == 3 and not s.done)
-            st = ("bold #000000 bg:#00d787" if sel else
-                  "#585858 italic" if disabled else
-                  "bold #ffffff")
-            push(st, f"  {cursor} {label}  ")
-            push("", "  ")
-            push("#3a3a3a" if disabled else "#6c6c6c", f"{desc}\n")
+            push("bold #5f87ff", "\n  Target:  ")
+            push("#87afff" if s.target else "#585858 italic",
+                 s.target if s.target else "\u2014 not selected \u2014")
 
-        # Status divider
-        push("", "\n")
-        push("#3a3a3a", "  ───────────────────────────────────────────────────────────")
-        push("", "\n  ")
+            if s.info:
+                push("", "\n  ")
+                push("#878787 italic", s.info)
 
-        # Status line
-        c = {"status": "#5faf5f", "status-error": "#ff5f5f",
-             "status-warn": "#ffaf5f", "status-info": "#878787 italic"}
-        push(c.get(s.status_style, "#878787 italic"), s.status)
-        push("", "\n")
+            push("", "\n\n")
+            push("#3a3a3a", "  " + "\u2500" * 55)
+            push("", "\n")
 
-        # Help
-        push("#585858 italic", "↑↓  navigate  •  Enter  select  •  1-5  shortcut  •  q  quit")
-        push("", "\n")
+            for i, (label, desc) in enumerate(s.menu):
+                cursor = "\u25cf" if i == s.cursor else "\u25cb"
+                sel = i == s.cursor
+                is_save = (s.screen == "image" and i == 3) or (s.screen == "video" and i == 3)
+                disabled = is_save and not s.done
+                st = ("bold #000000 bg:#00d787" if sel else
+                      "#585858 italic" if disabled else
+                      "bold #ffffff")
+                push(st, f"  {cursor} {label}  ")
+                push("", "  ")
+                push("#3a3a3a" if disabled else "#6c6c6c", f"{desc}\n")
+
+            push("", "\n")
+            push("#3a3a3a", "  " + "\u2500" * 55)
+            push("", "\n  ")
+
+            c = {"status": "#5faf5f", "status-error": "#ff5f5f",
+                 "status-warn": "#ffaf5f", "status-info": "#878787 italic"}
+            push(c.get(s.status_style, "#878787 italic"), s.status)
+            push("", "\n")
+
+            n = len(s.menu)
+            push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut  \u2022  q  quit")
+            push("", "\n")
 
         return F
 
