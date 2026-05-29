@@ -44,7 +44,13 @@ except ImportError:
     HAS_APPLE_SILICON = False
 
 def get_xp():
-    if HAS_NVIDIA: return cp
+    if HAS_NVIDIA:
+        try:
+            # Test if CuPy is actually functional (not just installed)
+            cp.array([1])
+            return cp
+        except Exception:
+            pass
     if HAS_APPLE_SILICON: return mx
     return np
 
@@ -411,7 +417,11 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         import traceback
         tb = traceback.extract_tb(sys.exc_info()[2])
         line = tb[-1].lineno if tb else "???"
-        state.status = f"Error (L{line}): {e}"
+        msg = str(e)
+        if "CUDA headers" in msg or "cupy" in msg.lower():
+            state.status = f"CUDA Error (L{line}): missing headers. Try: pip install cupy-cuda12x[ctk]"
+        else:
+            state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
     finally:
         state.running = False
@@ -580,7 +590,11 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         import traceback
         tb = traceback.extract_tb(sys.exc_info()[2])
         line = tb[-1].lineno if tb else "???"
-        state.status = f"Error (L{line}): {e}"
+        msg = str(e)
+        if "CUDA headers" in msg or "cupy" in msg.lower():
+            state.status = f"CUDA Error (L{line}): missing headers. Try: pip install cupy-cuda12x[ctk]"
+        else:
+            state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
         if state.result_video_path and os.path.exists(state.result_video_path):
             try: os.unlink(state.result_video_path)
