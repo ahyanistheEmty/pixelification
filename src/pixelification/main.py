@@ -499,7 +499,7 @@ class PixelTUI:
         push("", "\n")
 
         # Help
-        push("#585858 italic", "↑↓  navigate  •  Enter  select  •  1-4  shortcut  •  q  quit")
+        push("#585858 italic", "↑↓  navigate  •  Enter  select  •  1-5  shortcut  •  q  quit")
         push("", "\n")
 
         return F

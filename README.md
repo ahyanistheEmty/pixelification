@@ -95,7 +95,9 @@ Press `ESC` or `q` during the animation to quit.
 - NumPy
 - `prompt_toolkit`
 
-Cross-platform support is included for Windows and Linux. On Linux, ensure `tkinter` is installed (e.g., `sudo apt install python3-tk`) for the file dialog fallback.
+Cross-platform support is included for Windows, Linux, and macOS. 
+- **Windows**: Uses native PowerShell file dialogs.
+- **Linux/macOS**: Uses `tkinter` for file dialogs. On Linux, ensure `tkinter` is installed (e.g., `sudo apt install python3-tk`). On macOS, it is typically included with Python installations.
 
 ## Rust Component (Aster Browser)
 

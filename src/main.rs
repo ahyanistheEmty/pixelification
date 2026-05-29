@@ -27,5 +27,5 @@ fn main() {
 #[cfg(not(windows))]
 fn main() {
     println!("The Aster Browser (Rust component) is currently only supported on Windows.");
-    println!("The Python component (pixelification) is available on all platforms.");
+    println!("The Python component (pixelification) is supported on Linux and macOS.");
 }
