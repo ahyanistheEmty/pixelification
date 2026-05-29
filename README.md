@@ -1,10 +1,16 @@
 # Pixelification
 
-A terminal tool that rearranges pixels from a source image to approximate a target image using optimal transport via color sorting — then animates each pixel physically sliding to its new position.
+A terminal tool that rearranges pixels — either between two images or across video frames — using optimal transport via colour sorting.
 
-No pixels are created. Every pixel in the output comes from the source image, just rearranged.
+No pixels are created. Every pixel in the output comes from the source, just rearranged.
 
-## How it works
+## Modes
+
+### Image Mode
+
+Rearrange pixels from a **source image** to approximate the layout of a **target image**, then watch a 60-frame pixel-sliding animation.
+
+#### How it works
 
 ```mermaid
 flowchart LR
@@ -23,28 +29,23 @@ flowchart LR
 
 2. **Map by rank** — a source pixel with rank *i* maps to the target position with rank *i*. This is the optimal transport: the *i*th darkest pixel in the source ends up where the *i*th darkest pixel was in the target.
 
-```
-   Source pixels (sorted)         Target positions (sorted)
-   ┌─────────────────────┐       ┌─────────────────────┐
-   │  rank 0 (darkest)   │──────→│  rank 0             │
-   │  rank 1             │──────→│  rank 1             │
-   │  rank 2             │──────→│  rank 2             │
-   │  ...                │       │  ...                │
-   │  rank N−1 (lightest)│──────→│  rank N−1           │
-   └─────────────────────┘       └─────────────────────┘
-```
-
 3. **Animate** — each pixel slides from its original position to its mapped position over 60 frames using linear interpolation. All pixels move simultaneously. When multiple pixels land on the same display cell, their colours are averaged.
 
+### Video Mode
+
+Rearrange every frame of a **source video** (or a still image looped as a video) to match the frames of a **target video**. Each frame pair is processed with the same sort-based algorithm, then the result is written to a temporary video and played back in an OpenCV window.
+
 ```
-   Frame 0               Frame 30              Frame 60
-   ┌────────┐            ┌────────┐            ┌────────┐
-   │• •     │            │  ••    │            │   ••   │
-   │  ••    │  ───────→  │ • ••   │  ───────→  │ ••     │
-   │   • •  │    lerp    │    • • │    lerp    │ •  •   │
-   └────────┘            └────────┘            └────────┘
-   source positions      midway                target positions
+Source frame i ──[color sort]──┐
+                                ├──[rank-map]──→ output frame i ──→ video file
+Target frame i ──[color sort]──┘
 ```
+
+**Key differences from Image Mode:**
+- **No pixel-sliding animation** — just the sort + write step, with a progress bar in the terminal
+- **Aspect-ratio handling** — if source and target have different aspect ratios, the narrower video is centered with black bars ("transparent pixels") so content isn't distorted
+- **Source can be a still image** — the same image is looped for every frame of the target video
+- **Explicit save** — video is written to a temp file during processing; click "Save Result Video" to export to your working directory
 
 ## Installation & Usage
 
@@ -72,21 +73,52 @@ Then run it:
 pixelification
 ```
 
+Reinstall after updates — the CLI command is unchanged:
+
+```bash
+uv tool install . --reinstall
+```
+
 ### Keyboard Controls
 
-A keyboard-navigated terminal interface opens. Use arrow keys to select images, press Enter to run.
+A keyboard-navigated terminal interface opens. You start at the main menu:
 
 ```
-↑↓  navigate  •  Enter  select  •  1-4  shortcut  •  q  quit
+  ■ Pixel Rearrangement Tool
+
+  ● Rearrange Images    sort pixels between two images
+  ○ Rearrange Videos    sort frames between two videos
+  ○ Quit                exit the application
 ```
 
-An OpenCV window opens with three panels:
+| Key | Action |
+|-----|--------|
+| `↑` `↓` | Navigate menu items |
+| `Enter` | Select highlighted item |
+| `1`–`N` | Direct shortcut for each item |
+| `q` / `Escape` | Quit |
+
+### Image Mode Controls
+
+Select source and target images, then run the rearrangement. An OpenCV window opens with three panels:
 
 | Source | Target | Reconstruction |
 |--------|--------|----------------|
 | Your image | Layout to approximate | Pixels sliding into place |
 
-Press `ESC` or `q` during the animation to quit.
+Press `ESC` or `q` during the animation to quit. Click "Save Result Image" to export the result to a PNG file.
+
+### Video Mode Controls
+
+Select a source video (or image) and a target video, then run. A progress bar shows in the terminal:
+
+```
+Status: Video: [████████░░░░░░░░░░] 62.0% (124/200)
+```
+
+After processing, the result plays in an OpenCV window (loops until you press `ESC`/`q` or click the X button). Click "Save Result Video" to export.
+
+If you use a still image as the source, it's automatically looped for every target frame.
 
 ## Requirements
 

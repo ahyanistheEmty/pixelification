@@ -42,15 +42,22 @@ STYLE = Style([
     ("help",          "#585858 italic"),
 ])
 
+_IMAGE_EXTS = frozenset({'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp'})
+
 
 # ── Native File Dialog ───────────────────────────────────────────────
 
 def _powershell_open_file(title: str, file_type: str = "image") -> str | None:
-    filt = ("Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp)|"
-            "*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp|All Files (*.*)|*.*")
     if file_type == "video":
         filt = ("Video Files (*.mp4;*.avi;*.mov;*.mkv;*.webm)|"
                 "*.mp4;*.avi;*.mov;*.mkv;*.webm|All Files (*.*)|*.*")
+    elif file_type == "media":
+        filt = ("Media Files (*.mp4;*.avi;*.mov;*.mkv;*.webm;*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webm)|"
+                "*.mp4;*.avi;*.mov;*.mkv;*.webm;*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webm|"
+                "All Files (*.*)|*.*")
+    else:
+        filt = ("Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp)|"
+                "*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif;*.webp|All Files (*.*)|*.*")
     script = (
         'Add-Type -AssemblyName System.Windows.Forms\n'
         '$f = New-Object System.Windows.Forms.OpenFileDialog\n'
@@ -93,6 +100,11 @@ def _tkinter_open_file(title: str, file_type: str = "image") -> str | None:
         if file_type == "video":
             filetypes = [
                 ("Video files", "*.mp4 *.avi *.mov *.mkv *.webm"),
+                ("All files",   "*.*"),
+            ]
+        elif file_type == "media":
+            filetypes = [
+                ("Media files", "*.mp4 *.avi *.mov *.mkv *.webm *.png *.jpg *.jpeg *.bmp *.tiff *.gif *.webp"),
                 ("All files",   "*.*"),
             ]
         else:
@@ -334,30 +346,49 @@ def letterbox_pad(img, target_w, target_h):
 
 def rearrange_video(source_path: str, target_path: str, state: State) -> None:
     try:
-        cap_src = cv2.VideoCapture(source_path)
-        cap_tgt = cv2.VideoCapture(target_path)
+        src_is_img = Path(source_path).suffix.lower() in _IMAGE_EXTS
 
-        if not cap_src.isOpened():
-            state.status = f"Can't open source video: {Path(source_path).name}"
-            state.status_style = "status-error"
-            return
-        if not cap_tgt.isOpened():
-            state.status = f"Can't open target video: {Path(target_path).name}"
-            state.status_style = "status-error"
-            return
+        if src_is_img:
+            img_src = cv2.imread(source_path, cv2.IMREAD_COLOR)
+            if img_src is None:
+                state.status = f"Can't read source image: {Path(source_path).name}"
+                state.status_style = "status-error"
+                return
+            h_src, w_src = img_src.shape[:2]
+            cap_tgt = cv2.VideoCapture(target_path)
+            if not cap_tgt.isOpened():
+                state.status = f"Can't open target video: {Path(target_path).name}"
+                state.status_style = "status-error"
+                return
+            total_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_COUNT))
+            total = total_tgt
+            if total == 0:
+                state.status = "Target video has no frames"
+                state.status_style = "status-error"
+                return
+            fps = cap_tgt.get(cv2.CAP_PROP_FPS)
+        else:
+            cap_src = cv2.VideoCapture(source_path)
+            cap_tgt = cv2.VideoCapture(target_path)
+            if not cap_src.isOpened():
+                state.status = f"Can't open source video: {Path(source_path).name}"
+                state.status_style = "status-error"
+                return
+            if not cap_tgt.isOpened():
+                state.status = f"Can't open target video: {Path(target_path).name}"
+                state.status_style = "status-error"
+                return
+            total_src = int(cap_src.get(cv2.CAP_PROP_FRAME_COUNT))
+            total_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_COUNT))
+            total = min(total_src, total_tgt)
+            if total == 0:
+                state.status = "One or both videos have no frames"
+                state.status_style = "status-error"
+                return
+            fps = cap_src.get(cv2.CAP_PROP_FPS)
+            h_src = int(cap_src.get(cv2.CAP_PROP_FRAME_WIDTH))
+            w_src = int(cap_src.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        total_src = int(cap_src.get(cv2.CAP_PROP_FRAME_COUNT))
-        total_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_COUNT))
-        total = min(total_src, total_tgt)
-
-        if total == 0:
-            state.status = "One or both videos have no frames"
-            state.status_style = "status-error"
-            return
-
-        fps = cap_src.get(cv2.CAP_PROP_FPS)
-        w_src = int(cap_src.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h_src = int(cap_src.get(cv2.CAP_PROP_FRAME_HEIGHT))
         w_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_WIDTH))
         h_tgt = int(cap_tgt.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
@@ -386,9 +417,15 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         state.status_style = "status-warn"
 
         for i in range(total):
-            ret_src, src_frame = cap_src.read()
+            if src_is_img:
+                src_frame = img_src.copy()
+            else:
+                ret_src, src_frame = cap_src.read()
+                if not ret_src:
+                    break
+
             ret_tgt, tgt_frame = cap_tgt.read()
-            if not ret_src or not ret_tgt:
+            if not ret_tgt:
                 break
 
             if pad_src:
@@ -415,7 +452,8 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
             bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
             state.status = f"Video: [{bar}] {pct:.1f}% ({i+1}/{total})"
 
-        cap_src.release()
+        if not src_is_img:
+            cap_src.release()
         cap_tgt.release()
         writer.release()
 
@@ -431,7 +469,7 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         cv2.namedWindow(wn, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(wn, 1280, 720)
 
-        while True:
+        while cv2.getWindowProperty(wn, cv2.WND_PROP_VISIBLE) >= 1:
             ret, frame = cap.read()
             if not ret:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -583,7 +621,7 @@ class PixelTUI:
         self._invalidate()
 
     def _select_source_video(self):
-        path = select_file("Select Source Video", "video")
+        path = select_file("Select Source Image or Video", "media")
         if path:
             self.state.source = path
             self._refresh_info()
@@ -687,15 +725,23 @@ class PixelTUI:
                         kb = Path(path).stat().st_size / 1024
                         parts.append(f"{Path(path).name}  {w}\u00d7{h}  ({kb:.0f} KB)")
                 else:
-                    cap = cv2.VideoCapture(path)
-                    if cap.isOpened():
-                        total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                        vfps = cap.get(cv2.CAP_PROP_FPS)
-                        dur = total_f / vfps if vfps > 0 else 0
-                        vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        cap.release()
-                        parts.append(f"{Path(path).name}  {vw}\u00d7{vh}  {total_f}f  {dur:.1f}s")
+                    ext = Path(path).suffix.lower()
+                    if ext in _IMAGE_EXTS:
+                        img = cv2.imread(path, cv2.IMREAD_COLOR)
+                        if img is not None:
+                            h, w = img.shape[:2]
+                            kb = Path(path).stat().st_size / 1024
+                            parts.append(f"{Path(path).name}  {w}\u00d7{h}  ({kb:.0f} KB)")
+                    else:
+                        cap = cv2.VideoCapture(path)
+                        if cap.isOpened():
+                            total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                            vfps = cap.get(cv2.CAP_PROP_FPS)
+                            dur = total_f / vfps if vfps > 0 else 0
+                            vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                            cap.release()
+                            parts.append(f"{Path(path).name}  {vw}\u00d7{vh}  {total_f}f  {dur:.1f}s")
             except Exception:
                 parts.append(Path(path).name)
         if s.source and s.target:
