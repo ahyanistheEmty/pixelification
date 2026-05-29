@@ -22,20 +22,44 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, Window, FormattedTextControl
 from prompt_toolkit.styles import Style
 
-# ── GPU Support ──────────────────────────────────────────────────────
+# ── GPU & Accelerator Support ────────────────────────────────────────
 
 try:
     import cupy as cp
     try:
-        HAS_GPU = cp.cuda.runtime.getDeviceCount() > 0
+        HAS_NVIDIA = cp.cuda.runtime.getDeviceCount() > 0
     except Exception:
-        HAS_GPU = False
+        HAS_NVIDIA = False
 except ImportError:
     cp = None
-    HAS_GPU = False
+    HAS_NVIDIA = False
+
+try:
+    import mlx.core as mx
+    import platform
+    HAS_APPLE_SILICON = platform.system() == "Darwin" and platform.machine() == "arm64"
+except ImportError:
+    mx = None
+    HAS_APPLE_SILICON = False
 
 def get_xp():
-    return cp if HAS_GPU else np
+    if HAS_NVIDIA: return cp
+    if HAS_APPLE_SILICON: return mx
+    return np
+
+def to_np(arr):
+    if HAS_NVIDIA and cp is not None and isinstance(arr, cp.ndarray):
+        return arr.get()
+    if HAS_APPLE_SILICON and mx is not None and isinstance(arr, mx.array):
+        return np.array(arr)
+    return np.asanyarray(arr)
+
+def xp_lexsort(keys, xp):
+    if HAS_APPLE_SILICON and xp is mx:
+        # MLX lexsort takes a list of arrays in reverse order of significance
+        # like numpy, but as a single argument.
+        return mx.lexsort(list(keys))
+    return xp.lexsort(keys)
 
 # ── Styling ──────────────────────────────────────────────────────────
 
@@ -159,7 +183,7 @@ class State:
     done: bool = False
     result: np.ndarray | None = None
     result_video_path: str = ""
-    using_gpu: bool = HAS_GPU
+    using_accelerator: bool = HAS_NVIDIA or HAS_APPLE_SILICON
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
@@ -838,8 +862,8 @@ class PixelTUI:
 
         if s.screen == "main":
             push("bold #00d787", "  \u25a0 Pixel Rearrangement Tool")
-            if s.using_gpu:
-                push("bold #ffaf5f", " [GPU Acceleration Active]")
+            if s.using_accelerator:
+                push("bold #ffaf5f", " [Hardware Acceleration Active]")
             push("", "\n\n")
 
             for i, (label, desc) in enumerate(s.menu):
