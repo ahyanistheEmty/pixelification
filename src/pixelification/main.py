@@ -22,6 +22,20 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, Window, FormattedTextControl
 from prompt_toolkit.styles import Style
 
+# ── GPU Support ──────────────────────────────────────────────────────
+
+try:
+    import cupy as cp
+    try:
+        HAS_GPU = cp.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        HAS_GPU = False
+except ImportError:
+    cp = None
+    HAS_GPU = False
+
+def get_xp():
+    return cp if HAS_GPU else np
 
 # ── Styling ──────────────────────────────────────────────────────────
 
@@ -145,6 +159,7 @@ class State:
     done: bool = False
     result: np.ndarray | None = None
     result_video_path: str = ""
+    using_gpu: bool = HAS_GPU
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
@@ -177,11 +192,13 @@ class State:
 
 # ── Rearrangement Engine ─────────────────────────────────────────────
 
-def compute_sort_keys(img):
+def compute_sort_keys(img, xp=np):
     h, w = img.shape[:2]
     flat = img.reshape(-1, 3).astype(np.float32)
     lum = 0.299 * flat[:, 2] + 0.587 * flat[:, 1] + 0.114 * flat[:, 0]
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV_FULL).reshape(-1, 3).astype(np.float32)
+    if xp is not np:
+        return xp.array(lum), xp.array(hsv[:, 0]), xp.array(hsv[:, 1])
     return lum, hsv[:, 0], hsv[:, 1]
 
 
@@ -225,14 +242,17 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         h, w = img_src.shape[:2]
         img_tgt = cv2.resize(img_tgt, (w, h))
 
-        s_l, s_h, s_s = compute_sort_keys(img_src)
-        t_l, t_h, t_s = compute_sort_keys(img_tgt)
-        s_order = np.lexsort((s_s, s_h, s_l))
-        t_order = np.lexsort((t_s, t_h, t_l))
+        xp = get_xp()
+        s_l, s_h, s_s = compute_sort_keys(img_src, xp)
+        t_l, t_h, t_s = compute_sort_keys(img_tgt, xp)
+        s_order = xp.lexsort((s_s, s_h, s_l))
+        t_order = xp.lexsort((t_s, t_h, t_l))
 
-        out = np.empty_like(img_src.reshape(-1, 3), dtype=np.uint8)
-        out[t_order] = img_src.reshape(-1, 3)[s_order]
-        out_img = out.reshape(h, w, 3)
+        out_flat = xp.empty_like(xp.array(img_src.reshape(-1, 3)), dtype=xp.uint8)
+        out_flat[t_order] = xp.array(img_src.reshape(-1, 3))[s_order]
+        out_img = out_flat.reshape(h, w, 3)
+        if xp is not np:
+            out_img = out_img.get()
 
         sw, sh = get_screen_resolution()
         canvas = np.full((sh, sw, 3), 32, dtype=np.uint8)
@@ -266,7 +286,7 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         cv2.waitKey(300)
 
         total = h * w
-        forward = np.empty(total, dtype=np.int32)
+        forward = xp.empty(total, dtype=xp.int32)
         forward[s_order] = t_order
 
         scx = iw / w
@@ -277,32 +297,45 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         gx, gy = np.meshgrid(s_idx_x, s_idx_y)
         src_lin = gy * w + gx
 
+        if xp is not np:
+            src_lin = xp.array(src_lin)
+
         tgt_lin = forward[src_lin]
-        tgt_dx = (tgt_lin % w).astype(np.float32) * scx
-        tgt_dy = (tgt_lin // w).astype(np.float32) * scy
+        tgt_dx = (tgt_lin % w).astype(xp.float32) * scx
+        tgt_dy = (tgt_lin // w).astype(xp.float32) * scy
 
-        src_dx = gx.astype(np.float32) * scx
-        src_dy = gy.astype(np.float32) * scy
+        src_dx = xp.array(gx.astype(np.float32) * scx)
+        src_dy = xp.array(gy.astype(np.float32) * scy)
 
-        colors = src_s.reshape(-1, 3).astype(np.float32)
+        colors = xp.array(src_s.reshape(-1, 3).astype(np.float32))
 
         num_frames = 60
         for fi in range(num_frames):
             t = (fi + 1) / num_frames
 
-            curr_x = np.clip((1 - t) * src_dx.ravel() + t * tgt_dx.ravel(), 0, iw - 1)
-            curr_y = np.clip((1 - t) * src_dy.ravel() + t * tgt_dy.ravel(), 0, ih - 1)
-            rx = np.round(curr_x).astype(np.int32)
-            ry = np.round(curr_y).astype(np.int32)
+            curr_x = xp.clip((1 - t) * src_dx.ravel() + t * tgt_dx.ravel(), 0, iw - 1)
+            curr_y = xp.clip((1 - t) * src_dy.ravel() + t * tgt_dy.ravel(), 0, ih - 1)
+            rx = xp.round(curr_x).astype(xp.int32)
+            ry = xp.round(curr_y).astype(xp.int32)
 
-            accum = np.zeros((ih, iw, 3), dtype=np.float32)
-            cnt = np.zeros((ih, iw), dtype=np.float32)
-            np.add.at(accum, (ry, rx), colors)
-            np.add.at(cnt, (ry, rx), 1.0)
+            accum = xp.zeros((ih, iw, 3), dtype=xp.float32)
+            cnt = xp.zeros((ih, iw), dtype=xp.float32)
+            
+            if xp is np:
+                np.add.at(accum, (ry, rx), colors)
+                np.add.at(cnt, (ry, rx), 1.0)
+            else:
+                xp.scatter_add(accum, (ry, rx), colors)
+                xp.scatter_add(cnt, (ry, rx), 1.0)
+                
             mask = cnt > 0
             accum[mask] /= cnt[mask, None]
 
-            rec_region[:] = accum.astype(np.uint8)
+            res_frame = accum.astype(xp.uint8)
+            if xp is not np:
+                res_frame = res_frame.get()
+            
+            rec_region[:] = res_frame
             cv2.imshow(wn, canvas)
             if cv2.waitKey(25) & 0xFF in (27, ord("q")):
                 break
@@ -416,6 +449,8 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         state.status = f"Video: processing 0/{total} frames"
         state.status_style = "status-warn"
 
+        xp = get_xp()
+
         for i in range(total):
             if src_is_img:
                 src_frame = img_src.copy()
@@ -435,14 +470,18 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
             if not pad_src and not pad_tgt and tgt_frame.shape[:2] != src_frame.shape[:2]:
                 tgt_frame = cv2.resize(tgt_frame, (out_w, out_h))
 
-            s_l, s_h, s_s = compute_sort_keys(src_frame)
-            t_l, t_h, t_s = compute_sort_keys(tgt_frame)
-            s_order = np.lexsort((s_s, s_h, s_l))
-            t_order = np.lexsort((t_s, t_h, t_l))
+            s_l, s_h, s_s = compute_sort_keys(src_frame, xp)
+            t_l, t_h, t_s = compute_sort_keys(tgt_frame, xp)
+            s_order = xp.lexsort((s_s, s_h, s_l))
+            t_order = xp.lexsort((t_s, t_h, t_l))
 
-            out = np.empty_like(src_frame.reshape(-1, 3), dtype=np.uint8)
-            out[t_order] = src_frame.reshape(-1, 3)[s_order]
-            out_frame = out.reshape(out_h, out_w, 3)
+            src_flat = xp.array(src_frame.reshape(-1, 3))
+            out_flat = xp.empty_like(src_flat, dtype=xp.uint8)
+            out_flat[t_order] = src_flat[s_order]
+            out_frame = out_flat.reshape(out_h, out_w, 3)
+            
+            if xp is not np:
+                out_frame = out_frame.get()
 
             writer.write(out_frame)
 
@@ -799,6 +838,8 @@ class PixelTUI:
 
         if s.screen == "main":
             push("bold #00d787", "  \u25a0 Pixel Rearrangement Tool")
+            if s.using_gpu:
+                push("bold #ffaf5f", " [GPU Acceleration Active]")
             push("", "\n\n")
 
             for i, (label, desc) in enumerate(s.menu):
