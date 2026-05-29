@@ -122,14 +122,16 @@ class State:
     status: str = "Ready"
     status_style: str = "status"
     info: str = ""
-    cursor: int = 0               # 0-3  →  source / target / run / quit
+    cursor: int = 0               # 0-4  →  source / target / run / save / quit
     running: bool = False
     done: bool = False
+    result: np.ndarray | None = None
 
     MENU = [
         ("Select Source Image",   "choose the image whose pixels will be rearranged"),
         ("Select Target Image",   "choose the image whose layout will be approximated"),
         ("Run Rearrangement",     "execute the sort-based pixel-matching algorithm"),
+        ("Save Result Image",     "save the reconstructed image to disk"),
         ("Quit",                  "exit the application"),
     ]
 
@@ -271,18 +273,20 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
             cv2.imshow(wn, canvas)
             if cv2.waitKey(25) & 0xFF in (27, ord("q")):
                 break
-        else:
-            rec_region[:] = cv2.resize(
-                img_src.reshape(-1, 3)[s_order][t_order.argsort()].reshape(h, w, 3),
-                (iw, ih),
-            )
-            cv2.imshow(wn, canvas)
 
-        cv2.waitKey(0)
+        rec_region[:] = cv2.resize(out_img, (iw, ih))
+        cv2.imshow(wn, canvas)
+
+        state.result = out_img
+        state.done = True
+        state.running = False
+
+        while True:
+            key = cv2.waitKey(100) & 0xFF
+            if key in (27, ord("q")):
+                break
+
         cv2.destroyAllWindows()
-
-        state.status = "Rearrangement finished!"
-        state.status_style = "status"
 
     except Exception as e:
         state.status = f"Error: {e}"
@@ -311,13 +315,13 @@ class PixelTUI:
         @kb.add("up")
         def _(event):
             if not self.state.running:
-                self.state.cursor = (self.state.cursor - 1) % 4
+                self.state.cursor = (self.state.cursor - 1) % 5
                 self._invalidate()
 
         @kb.add("down")
         def _(event):
             if not self.state.running:
-                self.state.cursor = (self.state.cursor + 1) % 4
+                self.state.cursor = (self.state.cursor + 1) % 5
                 self._invalidate()
 
         @kb.add("enter")
@@ -325,7 +329,7 @@ class PixelTUI:
             if not self.state.running:
                 self._dispatch(self.state.cursor)
 
-        for key, idx in [("1", 0), ("2", 1), ("3", 2), ("4", 3)]:
+        for key, idx in [("1", 0), ("2", 1), ("3", 2), ("4", 3), ("5", 4)]:
             @kb.add(key)
             def _(event, idx=idx):
                 if not self.state.running:
@@ -348,7 +352,8 @@ class PixelTUI:
         {0: self._select_source,
          1: self._select_target,
          2: self._run,
-         3: self._quit}[idx]()
+         3: self._save_result,
+         4: self._quit}[idx]()
 
     # ── Actions ──────────────────────────────────────────────────
 
@@ -386,6 +391,7 @@ class PixelTUI:
 
         self.state.running = True
         self.state.done = False
+        self.state.result = None
         self.state.status = "Rearrangement running in OpenCV window…"
         self.state.status_style = "status-warn"
         self._invalidate()
@@ -423,6 +429,22 @@ class PixelTUI:
         if self.state.source and self.state.target:
             parts.append("Ready!")
         self.state.info = "  |  ".join(parts) if parts else ""
+
+    def _save_result(self):
+        if self.state.result is None:
+            self.state.status = "No result to save — run rearrangement first!"
+            self.state.status_style = "status-error"
+            self._invalidate()
+            return
+
+        src_stem = Path(self.state.source).stem
+        tgt_stem = Path(self.state.target).stem
+        out_name = f"reconstructed_{src_stem}_from_{tgt_stem}.png"
+        out_path = Path.cwd() / out_name
+        cv2.imwrite(str(out_path), self.state.result)
+        self.state.status = f"Saved to {out_path}"
+        self.state.status_style = "status"
+        self._invalidate()
 
     def _quit(self):
         cv2.destroyAllWindows()
@@ -469,10 +491,13 @@ class PixelTUI:
         for i, (label, desc) in enumerate(State.MENU):
             cursor = "●" if i == s.cursor else "○"
             sel = i == s.cursor
-            push("bold #000000 bg:#00d787" if sel else "bold #ffffff",
-                 f"  {cursor} {label}  ")
+            disabled = (i == 3 and not s.done)
+            st = ("bold #000000 bg:#00d787" if sel else
+                  "#585858 italic" if disabled else
+                  "bold #ffffff")
+            push(st, f"  {cursor} {label}  ")
             push("", "  ")
-            push("#6c6c6c", f"{desc}\n")
+            push("#3a3a3a" if disabled else "#6c6c6c", f"{desc}\n")
 
         # Status divider
         push("", "\n")
@@ -486,7 +511,7 @@ class PixelTUI:
         push("", "\n")
 
         # Help
-        push("#585858 italic", "↑↓  navigate  •  Enter  select  •  1-4  shortcut  •  q  quit")
+        push("#585858 italic", "↑↓  navigate  •  Enter  select  •  1-5  shortcut  •  q  quit")
         push("", "\n")
 
         return F
