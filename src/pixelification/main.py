@@ -64,14 +64,14 @@ def xp_scatter_add(a, indices, updates, xp):
     if xp is np:
         np.add.at(a, indices, updates)
     elif HAS_NVIDIA and xp is cp:
-        cp.scatter_add(a, indices, updates)
+        if isinstance(indices, tuple):
+            cp.add.at(a, indices, updates)
+        else:
+            cp.scatter_add(a, indices, updates)
     elif HAS_APPLE_SILICON and xp is mx:
-        # MLX scatter_add: indices should be a list/tuple of arrays
-        # For 2D indices (ry, rx), we need to handle it.
-        # However, for simplicity in the animation loop, we can use 
-        # a flat index if needed, or handle the MLX scatter signature.
-        # MLX expects indices to be a single array or tuple of arrays 
-        # representing the coordinates.
+        # MLX scatter_add expects indices as a list of arrays for multi-dim
+        if isinstance(indices, tuple):
+            indices = list(indices)
         a[...] = mx.scatter_add(a, indices, updates)
     return a
 
