@@ -58,22 +58,22 @@ Target frame i ──[color sort]──┘
 
 ```bash
 # Install the project and its CLI as an executable
-uv tool install .
+uv tool install pixelification
 ```
 
-If you already have the CLI installed and want to update it after pulling changes, run:
+Then start it:
 
 ```bash
-uv tool install . --reinstall
+pixelification
 ```
 
 You can also run the tool without installing:
 
 ```bash
-uv run pixelification
+uvx pixelification
 ```
 
-### From PyPI (when available)
+### From PyPI
 
 ```bash
 pip install pixelification
@@ -83,36 +83,6 @@ Then start it:
 
 ```bash
 pixelification
-```
-
-### Using uv (Recommended)
-
-```bash
-# Install from source
-uv tool install .
-
-# Or run directly
-uv run pixelification
-```
-
-### From PyPI
-
-Once published, you can install it via:
-
-```bash
-pip install pixelification
-```
-
-Then run it:
-
-```bash
-pixelification
-```
-
-Reinstall after updates — the CLI command is unchanged:
-
-```bash
-uv tool install . --reinstall
 ```
 
 ### Keyboard Controls
