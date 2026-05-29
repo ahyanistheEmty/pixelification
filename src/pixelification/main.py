@@ -57,20 +57,26 @@ def to_np(arr):
     return np.asanyarray(arr)
 
 def xp_lexsort(keys, xp):
-    if HAS_APPLE_SILICON and xp is mx:
-        return mx.lexsort(list(keys))
+    if (HAS_APPLE_SILICON and xp is mx) or (HAS_NVIDIA and xp is cp):
+        return xp.lexsort(list(keys))
     return xp.lexsort(keys)
 
 def xp_scatter_add(a, indices, updates, xp):
     if xp is np:
         np.add.at(a, indices, updates)
     elif HAS_NVIDIA and xp is cp:
-        if isinstance(indices, tuple):
-            cp.add.at(a, indices, updates)
+        if isinstance(indices, (tuple, list)):
+            # CuPy scatter_add is fastest with flat indices
+            shape = a.shape
+            w = shape[1]
+            flat_idx = indices[0] * w + indices[1]
+            if a.ndim == 3:
+                cp.scatter_add(a.reshape(-1, shape[2]), flat_idx, updates)
+            else:
+                cp.scatter_add(a.ravel(), flat_idx, updates)
         else:
             cp.scatter_add(a, indices, updates)
     elif HAS_APPLE_SILICON and xp is mx:
-        # MLX scatter_add expects indices as a list of arrays for multi-dim
         if isinstance(indices, tuple):
             indices = list(indices)
         a[...] = mx.scatter_add(a, indices, updates)
