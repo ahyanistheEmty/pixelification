@@ -57,29 +57,44 @@ def to_np(arr):
     return np.asanyarray(arr)
 
 def xp_lexsort(keys, xp):
-    if (HAS_APPLE_SILICON and xp is mx) or (HAS_NVIDIA and xp is cp):
-        return xp.lexsort(list(keys))
+    if xp is np:
+        return np.lexsort(keys)
+    if HAS_NVIDIA and xp is cp:
+        # CuPy's lexsort can sometimes be picky about the sequence type.
+        # Stacking into a single 2D array is the most robust approach.
+        return cp.lexsort(cp.stack(keys))
+    if HAS_APPLE_SILICON and xp is mx:
+        return mx.lexsort(list(keys))
     return xp.lexsort(keys)
 
 def xp_scatter_add(a, indices, updates, xp):
     if xp is np:
         np.add.at(a, indices, updates)
-    elif HAS_NVIDIA and xp is cp:
+        return a
+    if HAS_NVIDIA and xp is cp:
+        # Ensure we're working with CuPy arrays
+        a_cp = cp.asanyarray(a)
+        updates_cp = cp.asanyarray(updates)
         if isinstance(indices, (tuple, list)):
-            # CuPy scatter_add is fastest with flat indices
-            shape = a.shape
+            # Flattened indexing is the most reliable path for CuPy scatter_add
+            shape = a_cp.shape
             w = shape[1]
-            flat_idx = indices[0] * w + indices[1]
-            if a.ndim == 3:
-                cp.scatter_add(a.reshape(-1, shape[2]), flat_idx, updates)
+            idx_y = cp.asanyarray(indices[0])
+            idx_x = cp.asanyarray(indices[1])
+            flat_idx = idx_y * w + idx_x
+            if a_cp.ndim == 3:
+                cp.scatter_add(a_cp.reshape(-1, shape[2]), flat_idx, updates_cp)
             else:
-                cp.scatter_add(a.ravel(), flat_idx, updates)
+                cp.scatter_add(a_cp.ravel(), flat_idx, updates_cp)
         else:
-            cp.scatter_add(a, indices, updates)
-    elif HAS_APPLE_SILICON and xp is mx:
+            cp.scatter_add(a_cp, cp.asanyarray(indices), updates_cp)
+        return a_cp
+    if HAS_APPLE_SILICON and xp is mx:
+        # MLX scatter_add expects indices as a list of arrays for multi-dim
         if isinstance(indices, tuple):
             indices = list(indices)
         a[...] = mx.scatter_add(a, indices, updates)
+        return a
     return a
 
 # ── Styling ──────────────────────────────────────────────────────────
@@ -393,7 +408,10 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         cv2.destroyAllWindows()
 
     except Exception as e:
-        state.status = f"Error: {e}"
+        import traceback
+        tb = traceback.extract_tb(sys.exc_info()[2])
+        line = tb[-1].lineno if tb else "???"
+        state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
     finally:
         state.running = False
@@ -559,7 +577,10 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         cv2.destroyAllWindows()
 
     except Exception as e:
-        state.status = f"Error: {e}"
+        import traceback
+        tb = traceback.extract_tb(sys.exc_info()[2])
+        line = tb[-1].lineno if tb else "???"
+        state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
         if state.result_video_path and os.path.exists(state.result_video_path):
             try: os.unlink(state.result_video_path)
