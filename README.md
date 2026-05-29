@@ -2,7 +2,7 @@
 
 A terminal tool that rearranges pixels from a source image to approximate a target image using optimal transport via color sorting — then animates each pixel physically sliding to its new position.
 
-No new pixels are created. Every pixel in the output comes from the source image, just rearranged.
+No pixels are created. Every pixel in the output comes from the source image, just rearranged.
 
 ## How it works
 
