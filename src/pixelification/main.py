@@ -16,6 +16,7 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from importlib.metadata import version, PackageNotFoundError
 
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -972,6 +973,12 @@ class PixelTUI:
 
 
 def main():
+    if "--version" in sys.argv or "-v" in sys.argv:
+        try:
+            print(f"pixelification {version('pixelification')}")
+        except PackageNotFoundError:
+            print("pixelification (local development)")
+        return
     PixelTUI().run()
 
 
