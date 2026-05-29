@@ -25,6 +25,8 @@ from prompt_toolkit.styles import Style
 
 # ── GPU & Accelerator Support ────────────────────────────────────────
 
+FORCE_CPU = False
+
 try:
     import cupy as cp
     try:
@@ -44,13 +46,20 @@ except ImportError:
     HAS_APPLE_SILICON = False
 
 def get_xp():
+    global FORCE_CPU
+    if FORCE_CPU:
+        return np
     if HAS_NVIDIA:
         try:
-            # Test if CuPy is actually functional (not just installed)
-            cp.array([1])
+            # Test if CuPy is actually functional. 
+            # Some errors (like missing headers) only trigger during kernel compilation.
+            # We try a small lexsort which is likely to trigger such checks.
+            test_arr = cp.array([3, 1, 2])
+            cp.lexsort(cp.stack((test_arr,)))
             return cp
         except Exception:
-            pass
+            # If CuPy is broken, don't try it again for this session
+            FORCE_CPU = True
     if HAS_APPLE_SILICON: return mx
     return np
 
@@ -415,11 +424,17 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
 
     except Exception as e:
         import traceback
-        tb = traceback.extract_tb(sys.exc_info()[2])
-        line = tb[-1].lineno if tb else "???"
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb = traceback.extract_tb(exc_traceback)
+        # Find the last frame that is in our own file
+        our_frame = next((f for f in reversed(tb) if "main.py" in f.filename), tb[-1])
+        line = our_frame.lineno
         msg = str(e)
         if "CUDA headers" in msg or "cupy" in msg.lower():
-            state.status = f"CUDA Error (L{line}): missing headers. Try: pip install cupy-cuda12x[ctk]"
+            global FORCE_CPU
+            FORCE_CPU = True
+            state.status = f"CUDA Error (L{line}): missing headers. Falling back to CPU..."
+            state.using_accelerator = False
         else:
             state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
@@ -588,11 +603,17 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
 
     except Exception as e:
         import traceback
-        tb = traceback.extract_tb(sys.exc_info()[2])
-        line = tb[-1].lineno if tb else "???"
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb = traceback.extract_tb(exc_traceback)
+        # Find the last frame that is in our own file
+        our_frame = next((f for f in reversed(tb) if "main.py" in f.filename), tb[-1])
+        line = our_frame.lineno
         msg = str(e)
         if "CUDA headers" in msg or "cupy" in msg.lower():
-            state.status = f"CUDA Error (L{line}): missing headers. Try: pip install cupy-cuda12x[ctk]"
+            global FORCE_CPU
+            FORCE_CPU = True
+            state.status = f"CUDA Error (L{line}): missing headers. Falling back to CPU..."
+            state.using_accelerator = False
         else:
             state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
