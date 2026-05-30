@@ -50,9 +50,9 @@ Target frame i ──[color sort]──┘
 ## Installation & Usage
 
 ### Platform Notes
-- **NVIDIA GPUs**: Full acceleration via CUDA (requires CUDA 12+). Works on Linux, Windows, and macOS with an NVIDIA GPU.
-- **Apple Silicon (macOS)**: Supports `mlx` accelerated backend. The tool will automatically use it on ARM macs. No additional binaries are needed.
+- **NVIDIA GPUs**: Full acceleration via CUDA (requires a working CUDA 13 environment). Works on Linux and Windows.
 - **Intel CPU/GPU**: Runs on CPU only – the tool will fall back to NumPy. No extra packages are required.
+- On first launch, the CLI writes a small runtime config file in your OS config directory with the detected hardware-acceleration flag.
 
 ### Using uv (Recommended)
 
@@ -132,9 +132,8 @@ If you use a still image as the source, it's automatically looped for every targ
 - OpenCV (`cv2`)
 - NumPy
 - `prompt_toolkit`
-- Optional GPU accelerators (installed automatically on supported platforms):
-    - **NVIDIA CUDA**: `cupy-cuda12x` (Linux/Windows) – for NVIDIA GPU acceleration
-    - **Apple Silicon**: `mlx` (macOS arm64 only) – for Metal acceleration
+- Optional GPU accelerator (installed automatically on supported platforms):
+    - **NVIDIA CUDA**: `cupy-cuda13x[ctk]` (Linux/Windows) – for NVIDIA GPU acceleration
 
 Cross-platform support is included for Windows and Linux. On Linux, ensure `tkinter` is installed (e.g., `sudo apt install python3-tk`) for the file dialog fallback.
 

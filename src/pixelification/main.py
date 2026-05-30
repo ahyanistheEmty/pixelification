@@ -22,6 +22,7 @@ from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, Window, FormattedTextControl
 from prompt_toolkit.styles import Style
+from pixelification.runtime import RuntimeConfig, load_or_create_runtime_config
 
 # ── GPU & Accelerator Support ────────────────────────────────────────
 
@@ -29,69 +30,53 @@ FORCE_CPU = False
 
 try:
     import cupy as cp
-    try:
-        HAS_NVIDIA = cp.cuda.runtime.getDeviceCount() > 0
-    except Exception:
-        HAS_NVIDIA = False
 except ImportError:
     cp = None
-    HAS_NVIDIA = False
+    HAS_CUPY = False
+else:
+    def _probe_cupy() -> bool:
+        try:
+            if cp.cuda.runtime.getDeviceCount() <= 0:
+                return False
+            test = cp.zeros((16,), dtype=cp.float32)
+            test = test * test + 1
+            cp.cuda.Stream.null.synchronize()
+            _ = float(test.sum().get())
+            return True
+        except Exception:
+            return False
 
-try:
-    import mlx.core as mx
-    import platform
-    HAS_APPLE_SILICON = platform.system() == "Darwin" and platform.machine() == "arm64"
-except ImportError:
-    mx = None
-    HAS_APPLE_SILICON = False
+    HAS_CUPY = _probe_cupy()
 
 def get_xp():
     global FORCE_CPU
     if FORCE_CPU:
         return np
-    if HAS_NVIDIA:
-        try:
-            # Test if CuPy is actually functional. 
-            # Some errors (like missing headers) only trigger during kernel compilation.
-            # We try a small lexsort which is likely to trigger such checks.
-            test_arr = cp.array([3, 1, 2])
-            cp.lexsort(cp.stack((test_arr,)))
-            return cp
-        except Exception:
-            # If CuPy is broken, don't try it again for this session
-            FORCE_CPU = True
-    if HAS_APPLE_SILICON: return mx
+    if HAS_CUPY and cp is not None:
+        return cp
     return np
 
 def to_np(arr):
     if arr is None: return None
-    if HAS_NVIDIA and cp is not None and isinstance(arr, cp.ndarray):
+    if HAS_CUPY and cp is not None and isinstance(arr, cp.ndarray):
         return arr.get()
-    if HAS_APPLE_SILICON and mx is not None and isinstance(arr, mx.array):
-        return np.array(arr)
     return np.asanyarray(arr)
 
 def xp_lexsort(keys, xp):
     if xp is np:
         return np.lexsort(keys)
-    if HAS_NVIDIA and xp is cp:
-        # CuPy's lexsort can sometimes be picky about the sequence type.
-        # Stacking into a single 2D array is the most robust approach.
+    if HAS_CUPY and xp is cp:
         return cp.lexsort(cp.stack(keys))
-    if HAS_APPLE_SILICON and xp is mx:
-        return mx.lexsort(list(keys))
     return xp.lexsort(keys)
 
 def xp_scatter_add(a, indices, updates, xp):
     if xp is np:
         np.add.at(a, indices, updates)
         return a
-    if HAS_NVIDIA and xp is cp:
-        # Ensure we're working with CuPy arrays
+    if HAS_CUPY and xp is cp:
         a_cp = cp.asanyarray(a)
         updates_cp = cp.asanyarray(updates)
         if isinstance(indices, (tuple, list)):
-            # Flattened indexing is the most reliable path for CuPy scatter_add
             shape = a_cp.shape
             w = shape[1]
             idx_y = cp.asanyarray(indices[0])
@@ -104,12 +89,6 @@ def xp_scatter_add(a, indices, updates, xp):
         else:
             cp.scatter_add(a_cp, cp.asanyarray(indices), updates_cp)
         return a_cp
-    if HAS_APPLE_SILICON and xp is mx:
-        # MLX scatter_add expects indices as a list of arrays for multi-dim
-        if isinstance(indices, tuple):
-            indices = list(indices)
-        a[...] = mx.scatter_add(a, indices, updates)
-        return a
     return a
 
 # ── Styling ──────────────────────────────────────────────────────────
@@ -234,7 +213,7 @@ class State:
     done: bool = False
     result: np.ndarray | None = None
     result_video_path: str = ""
-    using_accelerator: bool = HAS_NVIDIA or HAS_APPLE_SILICON
+    using_accelerator: bool = HAS_CUPY
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
@@ -430,10 +409,10 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         our_frame = next((f for f in reversed(tb) if "main.py" in f.filename), tb[-1])
         line = our_frame.lineno
         msg = str(e)
-        if "CUDA headers" in msg or "cupy" in msg.lower():
+        if "cupy" in msg.lower():
             global FORCE_CPU
             FORCE_CPU = True
-            state.status = f"CUDA Error (L{line}): missing headers. Falling back to CPU..."
+            state.status = f"CuPy Error (L{line}): falling back to CPU..."
             state.using_accelerator = False
         else:
             state.status = f"Error (L{line}): {e}"
@@ -609,10 +588,10 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         our_frame = next((f for f in reversed(tb) if "main.py" in f.filename), tb[-1])
         line = our_frame.lineno
         msg = str(e)
-        if "CUDA headers" in msg or "cupy" in msg.lower():
+        if "cupy" in msg.lower():
             global FORCE_CPU
             FORCE_CPU = True
-            state.status = f"CUDA Error (L{line}): missing headers. Falling back to CPU..."
+            state.status = f"CuPy Error (L{line}): falling back to CPU..."
             state.using_accelerator = False
         else:
             state.status = f"Error (L{line}): {e}"
@@ -629,8 +608,9 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
 # ── TUI Application ──────────────────────────────────────────────────
 
 class PixelTUI:
-    def __init__(self):
-        self.state = State()
+    def __init__(self, runtime_config: RuntimeConfig):
+        self.runtime_config = runtime_config
+        self.state = State(using_accelerator=runtime_config.hardware_acceleration_available)
 
         self.kb = KeyBindings()
         self._register_bindings()
@@ -929,10 +909,12 @@ class PixelTUI:
             if text:
                 F.append((style, text))
 
+        accel_text = "Yes (CuPy)" if s.using_accelerator else "No (CPU)"
+        accel_style = "bold #ffaf5f" if s.using_accelerator else "bold #ff5f5f"
+
         if s.screen == "main":
             push("bold #00d787", "  \u25a0 Pixel Rearrangement Tool")
-            if s.using_accelerator:
-                push("bold #ffaf5f", " [Hardware Acceleration Active]")
+            push(accel_style, f"  Hardware acceleration: {accel_text}")
             push("", "\n\n")
 
             for i, (label, desc) in enumerate(s.menu):
@@ -958,6 +940,7 @@ class PixelTUI:
             mode_label = "Image Mode" if s.screen == "image" else "Video Mode"
             push("bold #00d787", f"  \u25a0 Pixel Rearrangement Tool")
             push("bold #5f87ff", f"  \u2014  [ {mode_label} ]")
+            push(accel_style, f"\n  Hardware acceleration: {accel_text}")
             push("", "\n")
             push("#3a3a3a", "  " + "\u2501" * 55)
             push("", "\n")
@@ -1041,7 +1024,8 @@ def main():
         except PackageNotFoundError:
             print("pixelification (local development)")
         return
-    PixelTUI().run()
+    runtime_config = load_or_create_runtime_config(HAS_CUPY)
+    PixelTUI(runtime_config).run()
 
 
 # ── Entry Point ──────────────────────────────────────────────────────
