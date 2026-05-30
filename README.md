@@ -100,7 +100,23 @@ Status: Video: [████████████░░░░░░] 62.0% (1
 
 ## ◈ Installation
 
-### From PyPI
+### Using uv (Recommended)
+
+Install Pixelification as a global tool:
+
+```bash
+uv tool install pixelification
+```
+
+Run it from anywhere:
+
+```bash
+pixelification
+```
+
+---
+
+### Using pip
 
 ```bash
 pip install pixelification
@@ -112,12 +128,15 @@ Then run:
 pixelification
 ```
 
-Or skip the install entirely:
+---
+
+### Using pipx
+
+No installation required:
 
 ```bash
 pipx run pixelification
 ```
-
 ---
 
 ## ◈ Hardware Support
