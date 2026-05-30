@@ -33,20 +33,18 @@ try:
 except ImportError:
     cp = None
     HAS_CUPY = False
+    CUPY_STATUS_TEXT = "No (CuPy not installed)"
 else:
-    def _probe_cupy() -> bool:
+    def _probe_cupy() -> tuple[bool, str]:
         try:
-            if cp.cuda.runtime.getDeviceCount() <= 0:
-                return False
-            test = cp.zeros((16,), dtype=cp.float32)
-            test = test * test + 1
-            cp.cuda.Stream.null.synchronize()
-            _ = float(test.sum().get())
-            return True
+            device_count = cp.cuda.runtime.getDeviceCount()
+            if device_count > 0:
+                return True, f"Yes (CuPy, {device_count} CUDA device{'s' if device_count != 1 else ''})"
+            return False, "No (CuPy sees 0 CUDA devices)"
         except Exception:
-            return False
+            return False, "No (CuPy runtime unavailable)"
 
-    HAS_CUPY = _probe_cupy()
+    HAS_CUPY, CUPY_STATUS_TEXT = _probe_cupy()
 
 def get_xp():
     global FORCE_CPU
@@ -214,6 +212,7 @@ class State:
     result: np.ndarray | None = None
     result_video_path: str = ""
     using_accelerator: bool = HAS_CUPY
+    acceleration_status: str = CUPY_STATUS_TEXT
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
@@ -414,6 +413,7 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
             FORCE_CPU = True
             state.status = f"CuPy Error (L{line}): falling back to CPU..."
             state.using_accelerator = False
+            state.acceleration_status = "No (CuPy failed during compute; using CPU)"
         else:
             state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
@@ -593,6 +593,7 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
             FORCE_CPU = True
             state.status = f"CuPy Error (L{line}): falling back to CPU..."
             state.using_accelerator = False
+            state.acceleration_status = "No (CuPy failed during compute; using CPU)"
         else:
             state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
@@ -611,6 +612,7 @@ class PixelTUI:
     def __init__(self, runtime_config: RuntimeConfig):
         self.runtime_config = runtime_config
         self.state = State(using_accelerator=runtime_config.hardware_acceleration_available)
+        self.state.acceleration_status = CUPY_STATUS_TEXT
 
         self.kb = KeyBindings()
         self._register_bindings()
@@ -909,7 +911,7 @@ class PixelTUI:
             if text:
                 F.append((style, text))
 
-        accel_text = "Yes (CuPy)" if s.using_accelerator else "No (CPU)"
+        accel_text = s.acceleration_status
         accel_style = "bold #ffaf5f" if s.using_accelerator else "bold #ff5f5f"
 
         if s.screen == "main":
