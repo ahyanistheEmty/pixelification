@@ -923,13 +923,11 @@ class PixelTUI:
                 F.append((style, text))
 
         accel_text = s.acceleration_status
-        accel_style = "bold #ffaf5f" if s.using_accelerator else "bold #ff5f5f"
 
         if s.screen == "main":
             for line in ASCII_ART:
                 push("bold #00d787", "    " + line + "\n")
-            push(accel_style, f"  Hardware acceleration: {accel_text}")
-            push("", "\n\n")
+            push("", "\n")
 
             for i, (label, desc) in enumerate(s.menu):
                 cursor = "\u25cf" if i == s.cursor else "\u25cb"
@@ -949,12 +947,13 @@ class PixelTUI:
             push("", "\n")
             n = len(s.menu)
             push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut  \u2022  q  quit")
+            push("#585858 italic", "\n")
+            push("#585858 italic", f"  Hardware acceleration: {accel_text}")
             push("", "\n")
         else:
             mode_label = "Image Mode" if s.screen == "image" else "Video Mode"
             push("bold #00d787", f"  \u25a0 Pixel Rearrangement Tool")
             push("bold #5f87ff", f"  \u2014  [ {mode_label} ]")
-            push(accel_style, f"\n  Hardware acceleration: {accel_text}")
             push("", "\n")
             push("#3a3a3a", "  " + "\u2501" * 55)
             push("", "\n")
@@ -997,6 +996,8 @@ class PixelTUI:
 
             n = len(s.menu)
             push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut  \u2022  q  quit")
+            push("#585858 italic", "\n")
+            push("#585858 italic", f"  Hardware acceleration: {accel_text}")
             push("", "\n")
 
         return F
