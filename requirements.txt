@@ -2,5 +2,19 @@ prompt-toolkit>=3.0.0
 opencv-python>=4.0.0
 numpy>=1.20.0
 
-# Optional — CUDA acceleration (NVIDIA GPU required)
+# ── Developer Notes ─────────────────────────────────────────────────
+#
+#   pip install -r requirements.txt     → base deps only (no GPU)
+#   pip install -e .                    → base deps only (no GPU)
+#   pip install -e ".[cuda]"            → includes CuPy + NVIDIA libs
+#
+#   uv sync                             → base deps only
+#   uv sync --extra cuda                → includes CuPy + NVIDIA libs
+#   uv sync --all-extras                → includes CuPy + NVIDIA libs
+#
+#   CuPy / NVIDIA packages are ONLY installed when the 'cuda' extra is
+#   explicitly requested. Users without an NVIDIA GPU should NOT use
+#   the [cuda] extra.
+#
+# ── Optional — CUDA acceleration (NVIDIA GPU required) ──────────────
 # cupy-cuda13x[ctk]
