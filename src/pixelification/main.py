@@ -30,8 +30,10 @@ FORCE_CPU = False
 
 try:
     import cupy as cp
+    import cupyx as cpx
 except ImportError:
     cp = None
+    cpx = None
     HAS_CUPY = False
     CUPY_STATUS_TEXT = "No (CuPy not installed)"
 else:
@@ -71,7 +73,7 @@ def xp_scatter_add(a, indices, updates, xp):
     if xp is np:
         np.add.at(a, indices, updates)
         return a
-    if HAS_CUPY and xp is cp:
+    if HAS_CUPY and xp is cp and cpx is not None:
         a_cp = cp.asanyarray(a)
         updates_cp = cp.asanyarray(updates)
         if isinstance(indices, (tuple, list)):
@@ -81,11 +83,11 @@ def xp_scatter_add(a, indices, updates, xp):
             idx_x = cp.asanyarray(indices[1])
             flat_idx = idx_y * w + idx_x
             if a_cp.ndim == 3:
-                cp.scatter_add(a_cp.reshape(-1, shape[2]), flat_idx, updates_cp)
+                cpx.scatter_add(a_cp.reshape(-1, shape[2]), flat_idx, updates_cp)
             else:
-                cp.scatter_add(a_cp.ravel(), flat_idx, updates_cp)
+                cpx.scatter_add(a_cp.ravel(), flat_idx, updates_cp)
         else:
-            cp.scatter_add(a_cp, cp.asanyarray(indices), updates_cp)
+            cpx.scatter_add(a_cp, cp.asanyarray(indices), updates_cp)
         return a_cp
     return a
 
