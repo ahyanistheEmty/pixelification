@@ -16,50 +16,80 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from importlib.metadata import version, PackageNotFoundError
 
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, Window, FormattedTextControl
 from prompt_toolkit.styles import Style
+from pixelification.runtime import RuntimeConfig, load_or_create_runtime_config
 
 # ── GPU & Accelerator Support ────────────────────────────────────────
 
+FORCE_CPU = False
+
 try:
     import cupy as cp
-    try:
-        HAS_NVIDIA = cp.cuda.runtime.getDeviceCount() > 0
-    except Exception:
-        HAS_NVIDIA = False
+    import cupyx as cpx
 except ImportError:
     cp = None
-    HAS_NVIDIA = False
+    cpx = None
+    HAS_CUPY = False
+    CUPY_STATUS_TEXT = "No (CuPy not installed)"
+else:
+    def _probe_cupy() -> tuple[bool, str]:
+        try:
+            device_count = cp.cuda.runtime.getDeviceCount()
+            if device_count > 0:
+                return True, f"Yes (CuPy, {device_count} CUDA device{'s' if device_count != 1 else ''})"
+            return False, "No (CuPy sees 0 CUDA devices)"
+        except Exception:
+            return False, "No (CuPy runtime unavailable)"
 
-try:
-    import mlx.core as mx
-    import platform
-    HAS_APPLE_SILICON = platform.system() == "Darwin" and platform.machine() == "arm64"
-except ImportError:
-    mx = None
-    HAS_APPLE_SILICON = False
+    HAS_CUPY, CUPY_STATUS_TEXT = _probe_cupy()
 
 def get_xp():
-    if HAS_NVIDIA: return cp
-    if HAS_APPLE_SILICON: return mx
+    global FORCE_CPU
+    if FORCE_CPU:
+        return np
+    if HAS_CUPY and cp is not None:
+        return cp
     return np
 
 def to_np(arr):
-    if HAS_NVIDIA and cp is not None and isinstance(arr, cp.ndarray):
+    if arr is None: return None
+    if HAS_CUPY and cp is not None and isinstance(arr, cp.ndarray):
         return arr.get()
-    if HAS_APPLE_SILICON and mx is not None and isinstance(arr, mx.array):
-        return np.array(arr)
     return np.asanyarray(arr)
 
 def xp_lexsort(keys, xp):
-    if HAS_APPLE_SILICON and xp is mx:
-        # MLX lexsort takes a list of arrays in reverse order of significance
-        # like numpy, but as a single argument.
-        return mx.lexsort(list(keys))
+    if xp is np:
+        return np.lexsort(keys)
+    if HAS_CUPY and xp is cp:
+        return cp.lexsort(cp.stack(keys))
     return xp.lexsort(keys)
+
+def xp_scatter_add(a, indices, updates, xp):
+    if xp is np:
+        np.add.at(a, indices, updates)
+        return a
+    if HAS_CUPY and xp is cp and cpx is not None:
+        a_cp = cp.asanyarray(a)
+        updates_cp = cp.asanyarray(updates)
+        if isinstance(indices, (tuple, list)):
+            shape = a_cp.shape
+            w = shape[1]
+            idx_y = cp.asanyarray(indices[0])
+            idx_x = cp.asanyarray(indices[1])
+            flat_idx = idx_y * w + idx_x
+            if a_cp.ndim == 3:
+                cpx.scatter_add(a_cp.reshape(-1, shape[2]), flat_idx, updates_cp)
+            else:
+                cpx.scatter_add(a_cp.ravel(), flat_idx, updates_cp)
+        else:
+            cpx.scatter_add(a_cp, cp.asanyarray(indices), updates_cp)
+        return a_cp
+    return a
 
 # ── Styling ──────────────────────────────────────────────────────────
 
@@ -183,7 +213,8 @@ class State:
     done: bool = False
     result: np.ndarray | None = None
     result_video_path: str = ""
-    using_accelerator: bool = HAS_NVIDIA or HAS_APPLE_SILICON
+    using_accelerator: bool = HAS_CUPY
+    acceleration_status: str = CUPY_STATUS_TEXT
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
@@ -269,14 +300,13 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         xp = get_xp()
         s_l, s_h, s_s = compute_sort_keys(img_src, xp)
         t_l, t_h, t_s = compute_sort_keys(img_tgt, xp)
-        s_order = xp.lexsort((s_s, s_h, s_l))
-        t_order = xp.lexsort((t_s, t_h, t_l))
+        s_order = xp_lexsort((s_s, s_h, s_l), xp)
+        t_order = xp_lexsort((t_s, t_h, t_l), xp)
 
         out_flat = xp.empty_like(xp.array(img_src.reshape(-1, 3)), dtype=xp.uint8)
         out_flat[t_order] = xp.array(img_src.reshape(-1, 3))[s_order]
         out_img = out_flat.reshape(h, w, 3)
-        if xp is not np:
-            out_img = out_img.get()
+        out_img = to_np(out_img)
 
         sw, sh = get_screen_resolution()
         canvas = np.full((sh, sw, 3), 32, dtype=np.uint8)
@@ -345,19 +375,13 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
             accum = xp.zeros((ih, iw, 3), dtype=xp.float32)
             cnt = xp.zeros((ih, iw), dtype=xp.float32)
             
-            if xp is np:
-                np.add.at(accum, (ry, rx), colors)
-                np.add.at(cnt, (ry, rx), 1.0)
-            else:
-                xp.scatter_add(accum, (ry, rx), colors)
-                xp.scatter_add(cnt, (ry, rx), 1.0)
+            accum = xp_scatter_add(accum, (ry, rx), colors, xp)
+            cnt = xp_scatter_add(cnt, (ry, rx), 1.0, xp)
                 
             mask = cnt > 0
             accum[mask] /= cnt[mask, None]
 
-            res_frame = accum.astype(xp.uint8)
-            if xp is not np:
-                res_frame = res_frame.get()
+            res_frame = to_np(accum).astype(np.uint8)
             
             rec_region[:] = res_frame
             cv2.imshow(wn, canvas)
@@ -379,7 +403,21 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         cv2.destroyAllWindows()
 
     except Exception as e:
-        state.status = f"Error: {e}"
+        import traceback
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb = traceback.extract_tb(exc_traceback)
+        # Find the last frame that is in our own file
+        our_frame = next((f for f in reversed(tb) if "main.py" in f.filename), tb[-1])
+        line = our_frame.lineno
+        msg = str(e)
+        if "cupy" in msg.lower():
+            global FORCE_CPU
+            FORCE_CPU = True
+            state.status = f"CuPy Error (L{line}): falling back to CPU..."
+            state.using_accelerator = False
+            state.acceleration_status = "No (CuPy failed during compute; using CPU)"
+        else:
+            state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
     finally:
         state.running = False
@@ -496,16 +534,15 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
 
             s_l, s_h, s_s = compute_sort_keys(src_frame, xp)
             t_l, t_h, t_s = compute_sort_keys(tgt_frame, xp)
-            s_order = xp.lexsort((s_s, s_h, s_l))
-            t_order = xp.lexsort((t_s, t_h, t_l))
+            s_order = xp_lexsort((s_s, s_h, s_l), xp)
+            t_order = xp_lexsort((t_s, t_h, t_l), xp)
 
             src_flat = xp.array(src_frame.reshape(-1, 3))
             out_flat = xp.empty_like(src_flat, dtype=xp.uint8)
             out_flat[t_order] = src_flat[s_order]
             out_frame = out_flat.reshape(out_h, out_w, 3)
             
-            if xp is not np:
-                out_frame = out_frame.get()
+            out_frame = to_np(out_frame)
 
             writer.write(out_frame)
 
@@ -546,7 +583,21 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         cv2.destroyAllWindows()
 
     except Exception as e:
-        state.status = f"Error: {e}"
+        import traceback
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb = traceback.extract_tb(exc_traceback)
+        # Find the last frame that is in our own file
+        our_frame = next((f for f in reversed(tb) if "main.py" in f.filename), tb[-1])
+        line = our_frame.lineno
+        msg = str(e)
+        if "cupy" in msg.lower():
+            global FORCE_CPU
+            FORCE_CPU = True
+            state.status = f"CuPy Error (L{line}): falling back to CPU..."
+            state.using_accelerator = False
+            state.acceleration_status = "No (CuPy failed during compute; using CPU)"
+        else:
+            state.status = f"Error (L{line}): {e}"
         state.status_style = "status-error"
         if state.result_video_path and os.path.exists(state.result_video_path):
             try: os.unlink(state.result_video_path)
@@ -560,8 +611,10 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
 # ── TUI Application ──────────────────────────────────────────────────
 
 class PixelTUI:
-    def __init__(self):
-        self.state = State()
+    def __init__(self, runtime_config: RuntimeConfig):
+        self.runtime_config = runtime_config
+        self.state = State(using_accelerator=runtime_config.hardware_acceleration_available)
+        self.state.acceleration_status = CUPY_STATUS_TEXT
 
         self.kb = KeyBindings()
         self._register_bindings()
@@ -860,10 +913,12 @@ class PixelTUI:
             if text:
                 F.append((style, text))
 
+        accel_text = s.acceleration_status
+        accel_style = "bold #ffaf5f" if s.using_accelerator else "bold #ff5f5f"
+
         if s.screen == "main":
             push("bold #00d787", "  \u25a0 Pixel Rearrangement Tool")
-            if s.using_accelerator:
-                push("bold #ffaf5f", " [Hardware Acceleration Active]")
+            push(accel_style, f"  Hardware acceleration: {accel_text}")
             push("", "\n\n")
 
             for i, (label, desc) in enumerate(s.menu):
@@ -889,6 +944,7 @@ class PixelTUI:
             mode_label = "Image Mode" if s.screen == "image" else "Video Mode"
             push("bold #00d787", f"  \u25a0 Pixel Rearrangement Tool")
             push("bold #5f87ff", f"  \u2014  [ {mode_label} ]")
+            push(accel_style, f"\n  Hardware acceleration: {accel_text}")
             push("", "\n")
             push("#3a3a3a", "  " + "\u2501" * 55)
             push("", "\n")
@@ -966,7 +1022,14 @@ class PixelTUI:
 
 
 def main():
-    PixelTUI().run()
+    if "--version" in sys.argv or "-v" in sys.argv:
+        try:
+            print(f"pixelification {version('pixelification')}")
+        except PackageNotFoundError:
+            print("pixelification (local development)")
+        return
+    runtime_config = load_or_create_runtime_config(HAS_CUPY)
+    PixelTUI(runtime_config).run()
 
 
 # ── Entry Point ──────────────────────────────────────────────────────

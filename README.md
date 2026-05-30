@@ -1,93 +1,158 @@
-# Pixelification
+<div align="center">
 
-A terminal tool that rearranges pixels — either between two images or across video frames — using optimal transport via colour sorting.
+```
+██████╗ ██╗██╗  ██╗███████╗██╗     ██╗███████╗██╗ ██████╗ █████╗ ████████╗██╗ ██████╗ ███╗   ██╗
+██╔══██╗██║╚██╗██╔╝██╔════╝██║     ██║██╔════╝██║██╔════╝██╔══██╗╚══██╔══╝██║██╔═══██╗████╗  ██║
+██████╔╝██║ ╚███╔╝ █████╗  ██║     ██║█████╗  ██║██║     ███████║   ██║   ██║██║   ██║██╔██╗ ██║
+██╔═══╝ ██║ ██╔██╗ ██╔══╝  ██║     ██║██╔══╝  ██║██║     ██╔══██║   ██║   ██║██║   ██║██║╚██╗██║
+██║     ██║██╔╝ ██╗███████╗███████╗██║██║     ██║╚██████╗██║  ██║   ██║   ██║╚██████╔╝██║ ╚████║
+╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝     ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+```
 
-No pixels are created. Every pixel in the output comes from the source, just rearranged.
+**No pixels created. No pixels destroyed. Only rearranged.**
 
-## Modes
+[![Python](https://img.shields.io/badge/Python-3.10+-1a1a2e?style=for-the-badge&logo=python&logoColor=e94560)](https://python.org)
+[![PyPI](https://img.shields.io/badge/PyPI-pixelification-1a1a2e?style=for-the-badge&logo=pypi&logoColor=e94560)](https://pypi.org/project/pixelification)
+[![CUDA](https://img.shields.io/badge/CUDA-13-1a1a2e?style=for-the-badge&logo=nvidia&logoColor=76b900)](https://developer.nvidia.com/cuda-toolkit)
+[![License](https://img.shields.io/badge/License-MIT-1a1a2e?style=for-the-badge)](LICENSE)
 
-### Image Mode
+</div>
+
+---
+
+## ◈ What Is This?
+
+**Pixelification** is a terminal tool built on a single elegant constraint:
+
+> *Every pixel in the output must come from the source. Nothing is invented.*
+
+It uses **optimal transport via colour sorting** to rearrange pixels — either between two images or across video frames — creating hypnotic, mathematically-grounded transformations. Think of it as a pixel teleporter: your source image's pixels physically migrate to approximate the structure of a target.
+
+---
+
+## ◈ Modes
+
+### ▸ Image Mode
 
 Rearrange pixels from a **source image** to approximate the layout of a **target image**, then watch a 60-frame pixel-sliding animation.
 
-#### How it works
-
-```mermaid
-flowchart LR
-    A[Source Image] --> C[Color sort<br/>lexsort by<br/>lum→hue→sat]
-    B[Target Image] --> D[Color sort<br/>lexsort by<br/>lum→hue→sat]
-    C --> E["s_order[i]"]
-    D --> F["t_order[i]"]
-    E --> G["forward[s_order] = t_order"]
-    F --> G
-    G --> H[Per-pixel<br/>position lerp]
-    H --> I[Scatter render<br/>np.add.at]
-    I --> J[60 frames<br/>slide animation]
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                                                                        │
+│   SOURCE            TARGET            RECONSTRUCTION                  │
+│   ┌──────┐          ┌──────┐          ┌──────┐                       │
+│   │ 🌆   │          │ 🌊   │          │ ✦ ✦  │  ← pixels sliding    │
+│   │      │ ──────▶  │      │ ──────▶  │  ✦   │    into place        │
+│   │      │          │      │          │ ✦  ✦ │                       │
+│   └──────┘          └──────┘          └──────┘                       │
+│                                                                        │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Sort by colour** — every pixel in both images is sorted by luminance, then hue, then saturation. The darkest source pixel gets rank 0, the lightest gets rank *N*−1. Same for the target.
-
-2. **Map by rank** — a source pixel with rank *i* maps to the target position with rank *i*. This is the optimal transport: the *i*th darkest pixel in the source ends up where the *i*th darkest pixel was in the target.
-
-3. **Animate** — each pixel slides from its original position to its mapped position over 60 frames using linear interpolation. All pixels move simultaneously. When multiple pixels land on the same display cell, their colours are averaged.
-
-### Video Mode
-
-Rearrange every frame of a **source video** (or a still image looped as a video) to match the frames of a **target video**. Each frame pair is processed with the same sort-based algorithm, then the result is written to a temporary video and played back in an OpenCV window.
+**How it works — in three steps:**
 
 ```
-Source frame i ──[color sort]──┐
-                                ├──[rank-map]──→ output frame i ──→ video file
-Target frame i ──[color sort]──┘
+  1  ╔═══════════════════╗    2  ╔═══════════════════╗    3  ╔════════════════════╗
+     ║   SORT BY COLOUR  ║       ║   MAP BY RANK     ║       ║   ANIMATE          ║
+     ║                   ║       ║                   ║       ║                    ║
+     ║  lum → hue → sat  ║  ──▶  ║  rank i (source)  ║  ──▶  ║  60-frame lerp     ║
+     ║                   ║       ║  → position of    ║       ║  all pixels move   ║
+     ║  darkest  = 0     ║       ║  rank i (target)  ║       ║  simultaneously    ║
+     ║  lightest = N-1   ║       ║                   ║       ║                    ║
+     ╚═══════════════════╝       ╚═══════════════════╝       ╚════════════════════╝
+```
+
+| Step | What happens |
+|------|-------------|
+| **Sort** | Every pixel in both images is ranked by luminance, then hue, then saturation |
+| **Map** | Source pixel with rank *i* teleports to where target pixel with rank *i* lives |
+| **Animate** | Each pixel slides from origin to destination over 60 frames via linear interpolation |
+
+> When multiple pixels land on the same display cell, their colours are averaged — a natural blending effect.
+
+---
+
+### ▸ Video Mode
+
+Rearrange every frame of a **source video** (or a still image looped as a video) to match the frames of a **target video**.
+
+```
+  Frame 0  ──[sort]──┬──[rank-map]──▶  Output Frame 0 ──┐
+  Frame 1  ──[sort]──┼──[rank-map]──▶  Output Frame 1   ├──▶  video file
+    ...              │                      ...          │
+  Frame N  ──[sort]──┴──[rank-map]──▶  Output Frame N ──┘
 ```
 
 **Key differences from Image Mode:**
-- **No pixel-sliding animation** — just the sort + write step, with a progress bar in the terminal
-- **Aspect-ratio handling** — if source and target have different aspect ratios, the narrower video is centered with black bars ("transparent pixels") so content isn't distorted
-- **Source can be a still image** — the same image is looped for every frame of the target video
-- **Explicit save** — video is written to a temp file during processing; click "Save Result Video" to export to your working directory
 
-## Installation & Usage
+| Feature | Image Mode | Video Mode |
+|---------|-----------|-----------|
+| Animation | 60-frame pixel-slide | None — direct sort + write |
+| Aspect ratio handling | N/A | Black bars to preserve content |
+| Still image as source | ✗ | ✓ looped for every target frame |
+| Progress feedback | Visual window | Terminal progress bar |
 
-### Platform Notes
-- **NVIDIA GPUs**: Full acceleration via CUDA (requires CUDA 12+). Works on Linux, Windows, and macOS with an NVIDIA GPU.
-- **Apple Silicon (macOS)**: Supports `mlx` accelerated backend. The tool will automatically use it on ARM macs. No additional binaries are needed.
-- **Intel CPU/GPU**: Runs on CPU only – the tool will fall back to NumPy. No extra packages are required.
+```
+Status: Video: [████████████░░░░░░] 62.0% (124/200)
+```
+
+---
+
+## ◈ Installation
 
 ### Using uv (Recommended)
 
+Install Pixelification as a global tool:
+
 ```bash
-# Install the project and its CLI as an executable
 uv tool install pixelification
 ```
 
-Then start it:
+Run it from anywhere:
 
 ```bash
 pixelification
 ```
 
-You can also run the tool without installing:
+---
 
-```bash
-uvx pixelification
-```
-
-### From PyPI
+### Using pip
 
 ```bash
 pip install pixelification
 ```
 
-Then start it:
+Then run:
 
 ```bash
 pixelification
 ```
 
-### Keyboard Controls
+---
 
-A keyboard-navigated terminal interface opens. You start at the main menu:
+### Using pipx
+
+No installation required:
+
+```bash
+pipx run pixelification
+```
+---
+
+## ◈ Hardware Support
+
+| Platform | Acceleration | Notes |
+|----------|-------------|-------|
+| **NVIDIA GPU** | ✅ CUDA 13 | Full GPU acceleration via `cupy-cuda13x[ctk]` |
+| **Intel CPU/GPU** | ⚡ CPU (NumPy) | Automatic fallback, no extra packages needed |
+
+> On first launch, Pixelification writes a small runtime config to your OS config directory with the detected hardware-acceleration flag. It just works.
+
+---
+
+## ◈ Usage
+
+A keyboard-navigated terminal UI opens immediately:
 
 ```
   ■ Pixel Rearrangement Tool
@@ -97,52 +162,84 @@ A keyboard-navigated terminal interface opens. You start at the main menu:
   ○ Quit                exit the application
 ```
 
+### Keyboard Controls
+
 | Key | Action |
 |-----|--------|
 | `↑` `↓` | Navigate menu items |
 | `Enter` | Select highlighted item |
-| `1`–`N` | Direct shortcut for each item |
-| `q` / `Escape` | Quit |
+| `1`–`N` | Jump directly to item *N* |
+| `q` / `Esc` | Quit |
 
-### Image Mode Controls
+### Image Mode
 
-Select source and target images, then run the rearrangement. An OpenCV window opens with three panels:
+1. Select your source image
+2. Select your target image
+3. Watch the rearrangement play out in an OpenCV window — three panels: **Source · Target · Reconstruction**
+4. Press `ESC` or `q` to quit the animation
+5. Click **"Save Result Image"** to export a PNG
 
-| Source | Target | Reconstruction |
-|--------|--------|----------------|
-| Your image | Layout to approximate | Pixels sliding into place |
+### Video Mode
 
-Press `ESC` or `q` during the animation to quit. Click "Save Result Image" to export the result to a PNG file.
+1. Select a source video (or still image — it'll be looped)
+2. Select a target video
+3. Watch the terminal progress bar as frames are processed
+4. Result plays in an OpenCV window — loops until `ESC`/`q` or window close
+5. Click **"Save Result Video"** to export
 
-### Video Mode Controls
+---
 
-Select a source video (or image) and a target video, then run. A progress bar shows in the terminal:
+## ◈ Requirements
 
 ```
-Status: Video: [████████░░░░░░░░░░] 62.0% (124/200)
+Python     ≥ 3.10
+OpenCV     cv2
+NumPy
+prompt_toolkit
+
+# Optional — installed automatically on supported platforms:
+cupy-cuda13x[ctk]    # NVIDIA CUDA acceleration (Linux / Windows)
+python3-tk           # Linux only — for file dialog fallback
+                     # sudo apt install python3-tk
 ```
 
-After processing, the result plays in an OpenCV window (loops until you press `ESC`/`q` or click the X button). Click "Save Result Video" to export.
+---
 
-If you use a still image as the source, it's automatically looped for every target frame.
+## ◈ Rust Component
 
-## Requirements
+The codebase also includes **Aster Browser** — a Rust-based Win32 application.
 
-- Python 3.10+
-- OpenCV (`cv2`)
-- NumPy
-- `prompt_toolkit`
-- Optional GPU accelerators (installed automatically on supported platforms):
-    - **NVIDIA CUDA**: `cupy-cuda12x` (Linux/Windows) – for NVIDIA GPU acceleration
-    - **Apple Silicon**: `mlx` (macOS arm64 only) – for Metal acceleration
-
-Cross-platform support is included for Windows and Linux. On Linux, ensure `tkinter` is installed (e.g., `sudo apt install python3-tk`) for the file dialog fallback.
-
-## Rust Component (Aster Browser)
-
-The codebase also contains a Rust-based Win32 application. This component is currently only supported on Windows.
-To build the Rust component (Windows only):
+> ⚠️ Windows only.
 
 ```bash
 cargo build --release
 ```
+
+---
+
+## ◈ The Algorithm (Deep Dive)
+
+For the curious: this is **discrete optimal transport** solved via sorting. The classical OT problem asks *"how do I move mass from distribution A to distribution B at minimum cost?"* When cost = squared distance and both distributions have the same total mass, the solution on a 1D sorted line is simply to pair the *i*th element of one with the *i*th element of the other.
+
+Pixelification extends this to colour space: pixels are projected onto a 1D ordering by `(luminance, hue, saturation)`, making the sort a tractable proxy for true 2D optimal transport. The result is perceptually coherent pixel migration — similar tones find similar homes.
+
+```
+flowchart LR
+    A[Source Image] --> C[lexsort\nlum → hue → sat]
+    B[Target Image] --> D[lexsort\nlum → hue → sat]
+    C --> E[s_order]
+    D --> F[t_order]
+    E --> G[forward mapping\nforward at s_order = t_order]
+    F --> G
+    G --> H[per-pixel position lerp]
+    H --> I[scatter render\nnp.add.at]
+    I --> J[60-frame animation]
+```
+
+---
+
+<div align="center">
+
+*Every pixel has a story. This tool just reassigns the ending.*
+
+</div>
