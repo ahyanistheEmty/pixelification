@@ -229,7 +229,7 @@ class State:
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
         ("Rearrange Videos", "sort frames between two videos"),
-        ("Convert to ASCII Art", "turn an image into ASCII text"),
+        ("ASCII", "convert images to ASCII art"),
         ("Quit", "exit the application"),
     ]
 
@@ -254,6 +254,7 @@ class State:
     MENU_ASCII = [
         ("Select Image",          "choose an image to convert"),
         ("Run ASCII Conversion",  "convert the selected image to ASCII art"),
+        ("Copy to Clipboard",     "copy the ASCII art to the system clipboard"),
         ("Save Result",           "save the ASCII art to a .txt file"),
         ("Back to Main Menu",     "return to mode selection"),
         ("Quit",                  "exit the application"),
@@ -629,22 +630,58 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
 
 # ── ASCII Art Engine ─────────────────────────────────────────────────
 
-ASCII_CHARS = "@%#*+=-:. "
+ASCII_CHARS = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/|()1{}[]?-_+~<>i!lI;:,\"^`'. "
 
 
-def image_to_ascii(path: str, width: int = 120) -> str:
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
+def _auto_contrast(img: np.ndarray) -> np.ndarray:
+    lo, hi = int(img.min()), int(img.max())
+    if hi - lo < 1:
+        return img
+    return ((img.astype(np.float32) - lo) / (hi - lo) * 255).clip(0, 255).astype(np.uint8)
+
+
+def _floyd_steinberg(gray: np.ndarray, levels: int) -> np.ndarray:
+    h, w = gray.shape
+    out = gray.astype(np.float32).copy()
+    step = 255.0 / (levels - 1)
+    for y in range(h):
+        for x in range(w):
+            old = out[y, x]
+            quantized = round(old / step) * step
+            out[y, x] = quantized
+            err = old - quantized
+            if x + 1 < w:
+                out[y, x + 1] += err * 7 / 16
+            if y + 1 < h:
+                if x > 0:
+                    out[y + 1, x - 1] += err * 3 / 16
+                out[y + 1, x] += err * 5 / 16
+                if x + 1 < w:
+                    out[y + 1, x + 1] += err * 1 / 16
+    return out.clip(0, 255).astype(np.uint8)
+
+
+def image_to_ascii(path: str, width: int = 120, dither: bool = True) -> str:
+    bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if bgr is None:
         return ""
 
-    h, w = img.shape[:2]
+    gray = (0.299 * bgr[:, :, 2] + 0.587 * bgr[:, :, 1] + 0.114 * bgr[:, :, 0]).astype(np.uint8)
+
+    gray = _auto_contrast(gray)
+
+    h, w = gray.shape[:2]
     aspect = h / w
-    height = max(int(width * aspect * 0.55), 1)
-    resized = cv2.resize(img, (width, height), interpolation=cv2.INTER_LANCZOS4)
+    height = max(int(width * aspect * 0.50), 1)
+    resized = cv2.resize(gray, (width, height), interpolation=cv2.INTER_LANCZOS4)
 
     ramp = ASCII_CHARS
     ramp_len = len(ramp)
-    idx = (resized / 255 * (ramp_len - 1)).astype(np.int32)
+
+    if dither:
+        resized = _floyd_steinberg(resized, ramp_len)
+
+    idx = (resized.astype(np.float32) / 255 * (ramp_len - 1)).round().astype(np.int32)
     idx = np.clip(idx, 0, ramp_len - 1)
 
     lines = []
@@ -735,9 +772,10 @@ class PixelTUI:
         elif s == "ascii":
             {0: self._select_source_ascii,
              1: self._run_ascii,
-             2: self._save_result_ascii,
-             3: self._back_to_main,
-             4: self._quit}[idx]()
+             2: self._copy_result_ascii,
+             3: self._save_result_ascii,
+             4: self._back_to_main,
+             5: self._quit}[idx]()
 
     # ── Actions ──────────────────────────────────────────────────
 
@@ -944,6 +982,26 @@ class PixelTUI:
             self.state.status_style = "status-error"
         self._invalidate()
 
+    def _copy_result_ascii(self):
+        if not self.state.result_ascii:
+            self.state.status = "No result to copy \u2014 run conversion first!"
+            self.state.status_style = "status-error"
+            self._invalidate()
+            return
+        try:
+            import subprocess
+            subprocess.run(
+                ["clip"], text=True, input=self.state.result_ascii,
+                creationflags=0x08000000,
+            )
+            size = len(self.state.result_ascii)
+            self.state.status = f"Copied {size} characters to clipboard"
+            self.state.status_style = "status"
+        except Exception as e:
+            self.state.status = f"Clipboard error: {e}"
+            self.state.status_style = "status-error"
+        self._invalidate()
+
     def _refresh_info(self):
         s = self.state
         parts = []
@@ -1086,8 +1144,9 @@ class PixelTUI:
                 cursor = "\u25cf" if i == s.cursor else "\u25cb"
                 sel = i == s.cursor
                 is_run = i == 1
-                is_save = i == 2
-                disabled = (is_run and not s.source) or (is_save and not s.done)
+                is_copy = i == 2
+                is_save = i == 3
+                disabled = (is_run and not s.source) or (is_copy and not s.done) or (is_save and not s.done)
                 st = ("bold #000000 bg:#00d787" if sel else
                       "#585858 italic" if disabled else
                       "bold #ffffff")
