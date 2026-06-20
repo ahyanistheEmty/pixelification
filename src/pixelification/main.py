@@ -1176,8 +1176,8 @@ class PixelTUI:
                 total_rows = len(all_lines)
                 total_cols = max(len(l) for l in all_lines) if all_lines else 0
 
-                vp_rows = (self._app.output.get_size().rows - 12
-                           if self._app else 20)
+                vp_rows = max(3, (self._app.output.get_size().rows - 18
+                                  if self._app else 10))
                 vp_cols = (self._app.output.get_size().columns - 5
                            if self._app else 76)
 
