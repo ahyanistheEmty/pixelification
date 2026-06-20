@@ -627,6 +627,32 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         state.done = True
 
 
+# ── ASCII Art Engine ─────────────────────────────────────────────────
+
+ASCII_CHARS = "@%#*+=-:. "
+
+
+def image_to_ascii(path: str, width: int = 120) -> str:
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return ""
+
+    h, w = img.shape[:2]
+    aspect = h / w
+    height = max(int(width * aspect * 0.55), 1)
+    resized = cv2.resize(img, (width, height), interpolation=cv2.INTER_LANCZOS4)
+
+    ramp = ASCII_CHARS
+    ramp_len = len(ramp)
+    idx = (resized / 255 * (ramp_len - 1)).astype(np.int32)
+    idx = np.clip(idx, 0, ramp_len - 1)
+
+    lines = []
+    for row in idx:
+        lines.append("".join(ramp[i] for i in row))
+    return "\n".join(lines)
+
+
 # ── TUI Application ──────────────────────────────────────────────────
 
 class PixelTUI:
@@ -690,7 +716,8 @@ class PixelTUI:
         if s == "main":
             {0: self._enter_image_mode,
              1: self._enter_video_mode,
-             2: self._quit}[idx]()
+             2: self._enter_ascii_mode,
+             3: self._quit}[idx]()
         elif s == "image":
             {0: self._select_source,
              1: self._select_target,
@@ -705,6 +732,12 @@ class PixelTUI:
              3: self._save_result_video,
              4: self._back_to_main,
              5: self._quit}[idx]()
+        elif s == "ascii":
+            {0: self._select_source_ascii,
+             1: self._run_ascii,
+             2: self._save_result_ascii,
+             3: self._back_to_main,
+             4: self._quit}[idx]()
 
     # ── Actions ──────────────────────────────────────────────────
 
@@ -845,6 +878,71 @@ class PixelTUI:
 
         if self._app:
             asyncio.create_task(waiter())
+
+    def _enter_ascii_mode(self):
+        self.state.screen = "ascii"
+        self.state.cursor = 0
+        self.state.status = "Select an image to convert to ASCII art"
+        self.state.status_style = "status-info"
+        self._invalidate()
+
+    def _select_source_ascii(self):
+        path = select_file("Select Image for ASCII", "image")
+        if path:
+            self.state.source = path
+            self.state.status = f"Image: {Path(path).name}"
+            self.state.status_style = "status"
+        else:
+            self.state.status = "Selection cancelled"
+            self.state.status_style = "status-info"
+        self._invalidate()
+
+    def _run_ascii(self):
+        if not self.state.source:
+            self.state.status = "Select an image first!"
+            self.state.status_style = "status-error"
+            self._invalidate()
+            return
+
+        self.state.status = "Converting to ASCII art\u2026"
+        self.state.status_style = "status-warn"
+        self._invalidate()
+
+        width = min(120, max(40, self._app.output.get_size().columns - 4 if self._app else 120))
+
+        try:
+            result = image_to_ascii(self.state.source, width)
+            if not result:
+                self.state.status = "Failed to read image"
+                self.state.status_style = "status-error"
+            else:
+                self.state.result_ascii = result
+                self.state.done = True
+                self.state.status = f"ASCII art generated ({len(result.split(chr(10)))} rows \u00d7 {width} cols)"
+                self.state.status_style = "status"
+        except Exception as e:
+            self.state.status = f"Error: {e}"
+            self.state.status_style = "status-error"
+        self._invalidate()
+
+    def _save_result_ascii(self):
+        if not self.state.result_ascii:
+            self.state.status = "No result to save \u2014 run conversion first!"
+            self.state.status_style = "status-error"
+            self._invalidate()
+            return
+
+        src_stem = Path(self.state.source).stem
+        out_name = f"{src_stem}_ascii.txt"
+        out_path = Path.cwd() / out_name
+        try:
+            out_path.write_text(self.state.result_ascii, encoding="utf-8")
+            self.state.status = f"Saved to {out_path}"
+            self.state.status_style = "status"
+        except Exception as e:
+            self.state.status = f"Save error: {e}"
+            self.state.status_style = "status-error"
+        self._invalidate()
 
     def _refresh_info(self):
         s = self.state
