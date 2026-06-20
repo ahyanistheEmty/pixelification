@@ -211,7 +211,7 @@ def select_file(title: str = "Select File", file_type: str = "image") -> str | N
 
 @dataclass
 class State:
-    screen: str = "main"        # "main" | "image" | "video"
+    screen: str = "main"        # "main" | "image" | "video" | "ascii"
     source: str = ""
     target: str = ""
     status: str = "Ready"
