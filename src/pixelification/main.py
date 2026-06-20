@@ -224,10 +224,12 @@ class State:
     result_video_path: str = ""
     using_accelerator: bool = HAS_CUPY
     acceleration_status: str = CUPY_STATUS_TEXT
+    result_ascii: str = ""
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
         ("Rearrange Videos", "sort frames between two videos"),
+        ("Convert to ASCII Art", "turn an image into ASCII text"),
         ("Quit", "exit the application"),
     ]
 
@@ -249,9 +251,17 @@ class State:
         ("Quit",                  "exit the application"),
     ]
 
+    MENU_ASCII = [
+        ("Select Image",          "choose an image to convert"),
+        ("Run ASCII Conversion",  "convert the selected image to ASCII art"),
+        ("Save Result",           "save the ASCII art to a .txt file"),
+        ("Back to Main Menu",     "return to mode selection"),
+        ("Quit",                  "exit the application"),
+    ]
+
     @property
     def menu(self):
-        return {"main": self.MENU_MAIN, "image": self.MENU_IMAGE, "video": self.MENU_VIDEO}[self.screen]
+        return {"main": self.MENU_MAIN, "image": self.MENU_IMAGE, "video": self.MENU_VIDEO, "ascii": self.MENU_ASCII}[self.screen]
 
 
 # ── Rearrangement Engine ─────────────────────────────────────────────
