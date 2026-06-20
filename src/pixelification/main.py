@@ -1058,6 +1058,55 @@ class PixelTUI:
             push("#585858 italic", "\n")
             push("#585858 italic", f"  Hardware acceleration: {accel_text}")
             push("", "\n")
+        elif s.screen == "ascii":
+            push("bold #00d787", "  \u25a0 Pixel Rearrangement Tool")
+            push("bold #5f87ff", "  \u2014  [ ASCII Art Mode ]")
+            push("", "\n")
+            push("#3a3a3a", "  " + "\u2501" * 55)
+            push("", "\n")
+            push("bold #5f87ff", "\n  Image:  ")
+            push("#87afff" if s.source else "#585858 italic",
+                 s.source if s.source else "\u2014 not selected \u2014")
+            push("", "\n\n")
+
+            if s.result_ascii:
+                max_rows = (self._app.output.get_size().rows - 12
+                            if self._app else 20)
+                push("", "  " + "\u2500" * 55 + "\n")
+                for line in s.result_ascii.split("\n")[:max_rows]:
+                    push("", "  " + line + "\n")
+                push("", "  " + "\u2500" * 55 + "\n")
+            elif s.done:
+                push("status-warn", "  Conversion produced no output.\n")
+
+            push("#3a3a3a", "  " + "\u2500" * 55)
+            push("", "\n")
+
+            for i, (label, desc) in enumerate(s.menu):
+                cursor = "\u25cf" if i == s.cursor else "\u25cb"
+                sel = i == s.cursor
+                is_run = i == 1
+                is_save = i == 2
+                disabled = (is_run and not s.source) or (is_save and not s.done)
+                st = ("bold #000000 bg:#00d787" if sel else
+                      "#585858 italic" if disabled else
+                      "bold #ffffff")
+                push(st, f"  {cursor} {label}  ")
+                push("", "  ")
+                push("#3a3a3a" if disabled else "#6c6c6c", f"{desc}\n")
+
+            push("", "\n")
+            push("#3a3a3a", "  " + "\u2500" * 55)
+            push("", "\n  ")
+
+            c = {"status": "#5faf5f", "status-error": "#ff5f5f",
+                 "status-warn": "#ffaf5f", "status-info": "#878787 italic"}
+            push(c.get(s.status_style, "#878787 italic"), s.status)
+            push("", "\n")
+
+            n = len(s.menu)
+            push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut  \u2022  q  quit")
+            push("#585858 italic", "\n")
         else:
             mode_label = "Image Mode" if s.screen == "image" else "Video Mode"
             push("bold #00d787", f"  \u25a0 Pixel Rearrangement Tool")
