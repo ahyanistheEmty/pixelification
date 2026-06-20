@@ -630,7 +630,7 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
 
 # ── ASCII Art Engine ─────────────────────────────────────────────────
 
-ASCII_CHARS = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/|()1{}[]?-_+~<>i!lI;:,\"^`'. "
+ASCII_CHARS = "@%#*+=-:. "
 
 
 def _auto_contrast(img: np.ndarray) -> np.ndarray:
@@ -672,7 +672,7 @@ def image_to_ascii(path: str, width: int = 120, dither: bool = True) -> str:
 
     h, w = gray.shape[:2]
     aspect = h / w
-    height = max(int(width * aspect * 0.50), 1)
+    height = max(int(width * aspect * 0.55), 1)
     resized = cv2.resize(gray, (width, height), interpolation=cv2.INTER_LANCZOS4)
 
     ramp = ASCII_CHARS
