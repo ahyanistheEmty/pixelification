@@ -225,6 +225,8 @@ class State:
     using_accelerator: bool = HAS_CUPY
     acceleration_status: str = CUPY_STATUS_TEXT
     result_ascii: str = ""
+    scroll_x: int = 0
+    scroll_y: int = 0
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
@@ -736,6 +738,44 @@ class PixelTUI:
                         self.state.cursor = idx
                         self._dispatch(idx)
 
+        @kb.add("s-up")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_y = max(0, self.state.scroll_y - 1)
+                self._invalidate()
+
+        @kb.add("s-down")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_y += 1
+                self._invalidate()
+
+        @kb.add("s-left")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_x = max(0, self.state.scroll_x - 4)
+                self._invalidate()
+
+        @kb.add("s-right")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_x += 4
+                self._invalidate()
+
+        @kb.add("pageup")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                jump = (self._app.output.get_size().rows - 12 if self._app else 20)
+                self.state.scroll_y = max(0, self.state.scroll_y - jump)
+                self._invalidate()
+
+        @kb.add("pagedown")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                jump = (self._app.output.get_size().rows - 12 if self._app else 20)
+                self.state.scroll_y += jump
+                self._invalidate()
+
         @kb.add("escape")
         @kb.add("q")
         def _(event):
@@ -920,6 +960,8 @@ class PixelTUI:
     def _enter_ascii_mode(self):
         self.state.screen = "ascii"
         self.state.cursor = 0
+        self.state.scroll_x = 0
+        self.state.scroll_y = 0
         self.state.status = "Select an image to convert to ASCII art"
         self.state.status_style = "status-info"
         self._invalidate()
@@ -946,6 +988,8 @@ class PixelTUI:
         self.state.status_style = "status-warn"
         self._invalidate()
 
+        self.state.scroll_x = 0
+        self.state.scroll_y = 0
         width = min(120, max(40, self._app.output.get_size().columns - 4 if self._app else 120))
 
         try:
@@ -1128,12 +1172,29 @@ class PixelTUI:
             push("", "\n\n")
 
             if s.result_ascii:
-                max_rows = (self._app.output.get_size().rows - 12
-                            if self._app else 20)
-                push("", "  " + "\u2500" * 55 + "\n")
-                for line in s.result_ascii.split("\n")[:max_rows]:
-                    push("", "  " + line + "\n")
-                push("", "  " + "\u2500" * 55 + "\n")
+                all_lines = s.result_ascii.split("\n")
+                total_rows = len(all_lines)
+                total_cols = max(len(l) for l in all_lines) if all_lines else 0
+
+                vp_rows = (self._app.output.get_size().rows - 12
+                           if self._app else 20)
+                vp_cols = (self._app.output.get_size().columns - 5
+                           if self._app else 76)
+
+                s.scroll_y = max(0, min(s.scroll_y, total_rows - vp_rows))
+                s.scroll_x = max(0, min(s.scroll_x, total_cols - vp_cols))
+
+                scroll_ind_y = (" \u2191" if s.scroll_y > 0 else "  ") + \
+                               (" \u2193" if s.scroll_y + vp_rows < total_rows else "  ")
+                scroll_ind_x = ("\u2190" if s.scroll_x > 0 else " ") + \
+                               ("\u2192" if s.scroll_x + vp_cols < total_cols else " ")
+                info = f"{total_rows}\u00d7{total_cols} {scroll_ind_y} {scroll_ind_x}"
+                push("#6c6c6c", f"  {info}\n")
+                push("", "  " + "\u2500" * min(vp_cols, total_cols) + "\n")
+                for line in all_lines[s.scroll_y:s.scroll_y + vp_rows]:
+                    slice = line[s.scroll_x:s.scroll_x + vp_cols]
+                    push("", "  " + slice + "\n")
+                push("", "  " + "\u2500" * min(vp_cols, total_cols) + "\n")
             elif s.done:
                 push("status-warn", "  Conversion produced no output.\n")
 
@@ -1164,7 +1225,8 @@ class PixelTUI:
             push("", "\n")
 
             n = len(s.menu)
-            push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut  \u2022  q  quit")
+            help_extra = "  \u2022  s-arrows/PgUp/Dn  scroll" if s.result_ascii else ""
+            push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut{help_extra}  \u2022  q  quit")
             push("#585858 italic", "\n")
         else:
             mode_label = "Image Mode" if s.screen == "image" else "Video Mode"
