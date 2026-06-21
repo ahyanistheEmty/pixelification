@@ -72,6 +72,31 @@ Rearrange pixels from a **source image** to approximate the layout of a **target
 
 ---
 
+### ▸ ASCII Art Mode
+
+Turn any image into **terminal ASCII art** — a scrollable character-based rendering using 10 luminance levels with auto-contrast and Floyd-Steinberg dithering.
+
+```
+  ┌─────────────────────────────────────────────────────────────┐
+  │  @@@@@@%####****+==--::..          Shift+arrows scroll      │
+  │  @@@%%%###***+++==--::..           PgUp/PgDn jump          │
+  │  @%@%%%####***+++==--::..            10 levels + dither    │
+  │  @@@%%%###***+++==--::..                                   │
+  └─────────────────────────────────────────────────────────────┘
+```
+
+**How it works:**
+
+| Step | What happens |
+|------|-------------|
+| **Read** | Image loaded via OpenCV, converted to luminance using Rec. 601 `(0.299R + 0.587G + 0.114B)` |
+| **Contrast** | Histogram stretched to full 0–255 range for maximum tonal depth |
+| **Resize** | Aspect-corrected resize (0.55 char ratio) to fit terminal width |
+| **Dither** | Floyd-Steinberg error diffusion distributes quantization error across neighboring pixels |
+| **Map** | Each pixel's brightness mapped to one of 10 characters `@%#*+=-:. ` sorted by ink coverage |
+
+---
+
 ### ▸ Video Mode
 
 Rearrange every frame of a **source video** (or a still image looped as a video) to match the frames of a **target video**.
@@ -159,6 +184,7 @@ A keyboard-navigated terminal UI opens immediately:
 
   ● Rearrange Images    sort pixels between two images
   ○ Rearrange Videos    sort frames between two videos
+  ○ ASCII               convert images to ASCII art
   ○ Quit                exit the application
 ```
 
@@ -169,6 +195,8 @@ A keyboard-navigated terminal UI opens immediately:
 | `↑` `↓` | Navigate menu items |
 | `Enter` | Select highlighted item |
 | `1`–`N` | Jump directly to item *N* |
+| `Shift`+`↑` `↓` `←` `→` | Scroll ASCII art (vertical / horizontal) |
+| `PgUp` / `PgDn` | Scroll ASCII art by one page |
 | `q` / `Esc` | Quit |
 
 ### Image Mode
@@ -186,6 +214,14 @@ A keyboard-navigated terminal UI opens immediately:
 3. Watch the terminal progress bar as frames are processed
 4. Result plays in an OpenCV window — loops until `ESC`/`q` or window close
 5. Click **"Save Result Video"** to export
+
+### ASCII Art Mode
+
+1. Select an image file
+2. Press **"Run ASCII Conversion"** — the art renders instantly in the terminal
+3. Use `Shift+arrows` to scroll, `PgUp`/`PgDn` to jump by page
+4. **"Copy to Clipboard"** pipes the full result to your system clipboard (`clip.exe`)
+5. **"Save Result"** writes a `.txt` file to the current directory
 
 ---
 

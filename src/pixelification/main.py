@@ -211,7 +211,7 @@ def select_file(title: str = "Select File", file_type: str = "image") -> str | N
 
 @dataclass
 class State:
-    screen: str = "main"        # "main" | "image" | "video"
+    screen: str = "main"        # "main" | "image" | "video" | "ascii"
     source: str = ""
     target: str = ""
     status: str = "Ready"
@@ -224,10 +224,14 @@ class State:
     result_video_path: str = ""
     using_accelerator: bool = HAS_CUPY
     acceleration_status: str = CUPY_STATUS_TEXT
+    result_ascii: str = ""
+    scroll_x: int = 0
+    scroll_y: int = 0
 
     MENU_MAIN = [
         ("Rearrange Images", "sort pixels between two images"),
         ("Rearrange Videos", "sort frames between two videos"),
+        ("ASCII", "convert images to ASCII art"),
         ("Quit", "exit the application"),
     ]
 
@@ -249,9 +253,18 @@ class State:
         ("Quit",                  "exit the application"),
     ]
 
+    MENU_ASCII = [
+        ("Select Image",          "choose an image to convert"),
+        ("Run ASCII Conversion",  "convert the selected image to ASCII art"),
+        ("Copy to Clipboard",     "copy the ASCII art to the system clipboard"),
+        ("Save Result",           "save the ASCII art to a .txt file"),
+        ("Back to Main Menu",     "return to mode selection"),
+        ("Quit",                  "exit the application"),
+    ]
+
     @property
     def menu(self):
-        return {"main": self.MENU_MAIN, "image": self.MENU_IMAGE, "video": self.MENU_VIDEO}[self.screen]
+        return {"main": self.MENU_MAIN, "image": self.MENU_IMAGE, "video": self.MENU_VIDEO, "ascii": self.MENU_ASCII}[self.screen]
 
 
 # ── Rearrangement Engine ─────────────────────────────────────────────
@@ -617,6 +630,68 @@ def rearrange_video(source_path: str, target_path: str, state: State) -> None:
         state.done = True
 
 
+# ── ASCII Art Engine ─────────────────────────────────────────────────
+
+ASCII_CHARS = "@%#*+=-:. "
+
+
+def _auto_contrast(img: np.ndarray) -> np.ndarray:
+    lo, hi = int(img.min()), int(img.max())
+    if hi - lo < 1:
+        return img
+    return ((img.astype(np.float32) - lo) / (hi - lo) * 255).clip(0, 255).astype(np.uint8)
+
+
+def _floyd_steinberg(gray: np.ndarray, levels: int) -> np.ndarray:
+    h, w = gray.shape
+    out = gray.astype(np.float32).copy()
+    step = 255.0 / (levels - 1)
+    for y in range(h):
+        for x in range(w):
+            old = out[y, x]
+            quantized = round(old / step) * step
+            out[y, x] = quantized
+            err = old - quantized
+            if x + 1 < w:
+                out[y, x + 1] += err * 7 / 16
+            if y + 1 < h:
+                if x > 0:
+                    out[y + 1, x - 1] += err * 3 / 16
+                out[y + 1, x] += err * 5 / 16
+                if x + 1 < w:
+                    out[y + 1, x + 1] += err * 1 / 16
+    return out.clip(0, 255).astype(np.uint8)
+
+
+def image_to_ascii(path: str, width: int = 120, dither: bool = True) -> str:
+    bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if bgr is None:
+        return ""
+
+    gray = (0.299 * bgr[:, :, 2] + 0.587 * bgr[:, :, 1] + 0.114 * bgr[:, :, 0]).astype(np.uint8)
+
+    gray = _auto_contrast(gray)
+
+    h, w = gray.shape[:2]
+    aspect = h / w
+    height = max(int(width * aspect * 0.55), 1)
+    resized = cv2.resize(gray, (width, height), interpolation=cv2.INTER_LANCZOS4)
+
+    ramp = ASCII_CHARS
+    ramp_len = len(ramp)
+
+    if dither:
+        resized = _floyd_steinberg(resized, ramp_len)
+
+    idx = (resized.astype(np.float32) / 255 * (ramp_len - 1)).round().astype(np.int32)
+    idx = np.clip(idx, 0, ramp_len - 1)
+
+    lines = []
+    for row in idx:
+        lines.append("".join(ramp[i] for i in row))
+    return "\n".join(lines)
+
+
 # ── TUI Application ──────────────────────────────────────────────────
 
 class PixelTUI:
@@ -663,6 +738,44 @@ class PixelTUI:
                         self.state.cursor = idx
                         self._dispatch(idx)
 
+        @kb.add("s-up")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_y = max(0, self.state.scroll_y - 1)
+                self._invalidate()
+
+        @kb.add("s-down")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_y += 1
+                self._invalidate()
+
+        @kb.add("s-left")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_x = max(0, self.state.scroll_x - 4)
+                self._invalidate()
+
+        @kb.add("s-right")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                self.state.scroll_x += 4
+                self._invalidate()
+
+        @kb.add("pageup")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                jump = (self._app.output.get_size().rows - 12 if self._app else 20)
+                self.state.scroll_y = max(0, self.state.scroll_y - jump)
+                self._invalidate()
+
+        @kb.add("pagedown")
+        def _(event):
+            if self.state.screen == "ascii" and self.state.result_ascii and not self.state.running:
+                jump = (self._app.output.get_size().rows - 12 if self._app else 20)
+                self.state.scroll_y += jump
+                self._invalidate()
+
         @kb.add("escape")
         @kb.add("q")
         def _(event):
@@ -680,7 +793,8 @@ class PixelTUI:
         if s == "main":
             {0: self._enter_image_mode,
              1: self._enter_video_mode,
-             2: self._quit}[idx]()
+             2: self._enter_ascii_mode,
+             3: self._quit}[idx]()
         elif s == "image":
             {0: self._select_source,
              1: self._select_target,
@@ -693,6 +807,13 @@ class PixelTUI:
              1: self._select_target_video,
              2: self._run_video,
              3: self._save_result_video,
+             4: self._back_to_main,
+             5: self._quit}[idx]()
+        elif s == "ascii":
+            {0: self._select_source_ascii,
+             1: self._run_ascii,
+             2: self._copy_result_ascii,
+             3: self._save_result_ascii,
              4: self._back_to_main,
              5: self._quit}[idx]()
 
@@ -836,6 +957,95 @@ class PixelTUI:
         if self._app:
             asyncio.create_task(waiter())
 
+    def _enter_ascii_mode(self):
+        self.state.screen = "ascii"
+        self.state.cursor = 0
+        self.state.scroll_x = 0
+        self.state.scroll_y = 0
+        self.state.status = "Select an image to convert to ASCII art"
+        self.state.status_style = "status-info"
+        self._invalidate()
+
+    def _select_source_ascii(self):
+        path = select_file("Select Image for ASCII", "image")
+        if path:
+            self.state.source = path
+            self.state.status = f"Image: {Path(path).name}"
+            self.state.status_style = "status"
+        else:
+            self.state.status = "Selection cancelled"
+            self.state.status_style = "status-info"
+        self._invalidate()
+
+    def _run_ascii(self):
+        if not self.state.source:
+            self.state.status = "Select an image first!"
+            self.state.status_style = "status-error"
+            self._invalidate()
+            return
+
+        self.state.status = "Converting to ASCII art\u2026"
+        self.state.status_style = "status-warn"
+        self._invalidate()
+
+        self.state.scroll_x = 0
+        self.state.scroll_y = 0
+        width = min(120, max(40, self._app.output.get_size().columns - 4 if self._app else 120))
+
+        try:
+            result = image_to_ascii(self.state.source, width)
+            if not result:
+                self.state.status = "Failed to read image"
+                self.state.status_style = "status-error"
+            else:
+                self.state.result_ascii = result
+                self.state.done = True
+                self.state.status = f"ASCII art generated ({len(result.split(chr(10)))} rows \u00d7 {width} cols)"
+                self.state.status_style = "status"
+        except Exception as e:
+            self.state.status = f"Error: {e}"
+            self.state.status_style = "status-error"
+        self._invalidate()
+
+    def _save_result_ascii(self):
+        if not self.state.result_ascii:
+            self.state.status = "No result to save \u2014 run conversion first!"
+            self.state.status_style = "status-error"
+            self._invalidate()
+            return
+
+        src_stem = Path(self.state.source).stem
+        out_name = f"{src_stem}_ascii.txt"
+        out_path = Path.cwd() / out_name
+        try:
+            out_path.write_text(self.state.result_ascii, encoding="utf-8")
+            self.state.status = f"Saved to {out_path}"
+            self.state.status_style = "status"
+        except Exception as e:
+            self.state.status = f"Save error: {e}"
+            self.state.status_style = "status-error"
+        self._invalidate()
+
+    def _copy_result_ascii(self):
+        if not self.state.result_ascii:
+            self.state.status = "No result to copy \u2014 run conversion first!"
+            self.state.status_style = "status-error"
+            self._invalidate()
+            return
+        try:
+            import subprocess
+            subprocess.run(
+                ["clip"], text=True, input=self.state.result_ascii,
+                creationflags=0x08000000,
+            )
+            size = len(self.state.result_ascii)
+            self.state.status = f"Copied {size} characters to clipboard"
+            self.state.status_style = "status"
+        except Exception as e:
+            self.state.status = f"Clipboard error: {e}"
+            self.state.status_style = "status-error"
+        self._invalidate()
+
     def _refresh_info(self):
         s = self.state
         parts = []
@@ -950,6 +1160,75 @@ class PixelTUI:
             push("#585858 italic", "\n")
             push("#585858 italic", f"  Hardware acceleration: {accel_text}")
             push("", "\n")
+        elif s.screen == "ascii":
+            push("bold #00d787", "  \u25a0 Pixel Rearrangement Tool")
+            push("bold #5f87ff", "  \u2014  [ ASCII Art Mode ]")
+            push("", "\n")
+            push("#3a3a3a", "  " + "\u2501" * 55)
+            push("", "\n")
+            push("bold #5f87ff", "\n  Image:  ")
+            push("#87afff" if s.source else "#585858 italic",
+                 s.source if s.source else "\u2014 not selected \u2014")
+            push("", "\n\n")
+
+            if s.result_ascii:
+                all_lines = s.result_ascii.split("\n")
+                total_rows = len(all_lines)
+                total_cols = max(len(l) for l in all_lines) if all_lines else 0
+
+                vp_rows = max(3, (self._app.output.get_size().rows - 18
+                                  if self._app else 10))
+                vp_cols = (self._app.output.get_size().columns - 5
+                           if self._app else 76)
+
+                s.scroll_y = max(0, min(s.scroll_y, total_rows - vp_rows))
+                s.scroll_x = max(0, min(s.scroll_x, total_cols - vp_cols))
+
+                scroll_ind_y = (" \u2191" if s.scroll_y > 0 else "  ") + \
+                               (" \u2193" if s.scroll_y + vp_rows < total_rows else "  ")
+                scroll_ind_x = ("\u2190" if s.scroll_x > 0 else " ") + \
+                               ("\u2192" if s.scroll_x + vp_cols < total_cols else " ")
+                info = f"{total_rows}\u00d7{total_cols} {scroll_ind_y} {scroll_ind_x}"
+                push("#6c6c6c", f"  {info}\n")
+                push("", "  " + "\u2500" * min(vp_cols, total_cols) + "\n")
+                for line in all_lines[s.scroll_y:s.scroll_y + vp_rows]:
+                    slice = line[s.scroll_x:s.scroll_x + vp_cols]
+                    push("", "  " + slice + "\n")
+                push("", "  " + "\u2500" * min(vp_cols, total_cols) + "\n")
+                push("#585858 italic", "  Shift+arrows scroll  \u2022  PgUp/PgDn jump\n")
+            elif s.done:
+                push("status-warn", "  Conversion produced no output.\n")
+
+            push("#3a3a3a", "  " + "\u2500" * 55)
+            push("", "\n")
+
+            for i, (label, desc) in enumerate(s.menu):
+                cursor = "\u25cf" if i == s.cursor else "\u25cb"
+                sel = i == s.cursor
+                is_run = i == 1
+                is_copy = i == 2
+                is_save = i == 3
+                disabled = (is_run and not s.source) or (is_copy and not s.done) or (is_save and not s.done)
+                st = ("bold #000000 bg:#00d787" if sel else
+                      "#585858 italic" if disabled else
+                      "bold #ffffff")
+                push(st, f"  {cursor} {label}  ")
+                push("", "  ")
+                push("#3a3a3a" if disabled else "#6c6c6c", f"{desc}\n")
+
+            push("", "\n")
+            push("#3a3a3a", "  " + "\u2500" * 55)
+            push("", "\n  ")
+
+            c = {"status": "#5faf5f", "status-error": "#ff5f5f",
+                 "status-warn": "#ffaf5f", "status-info": "#878787 italic"}
+            push(c.get(s.status_style, "#878787 italic"), s.status)
+            push("", "\n")
+
+            n = len(s.menu)
+            help_extra = "  \u2022  Shift+arrows  \u2022  PgUp/Dn jump" if s.result_ascii else ""
+            push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut{help_extra}  \u2022  q  quit")
+            push("#585858 italic", "\n")
         else:
             mode_label = "Image Mode" if s.screen == "image" else "Video Mode"
             push("bold #00d787", f"  \u25a0 Pixel Rearrangement Tool")
