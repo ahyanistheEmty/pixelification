@@ -1195,7 +1195,7 @@ class PixelTUI:
                     slice = line[s.scroll_x:s.scroll_x + vp_cols]
                     push("", "  " + slice + "\n")
                 push("", "  " + "\u2500" * min(vp_cols, total_cols) + "\n")
-                push("#585858 italic", "  <S-arrows> <PgUp/Dn> scroll\n")
+                push("#585858 italic", "  Shift+arrows scroll  \u2022  PgUp/PgDn jump\n")
             elif s.done:
                 push("status-warn", "  Conversion produced no output.\n")
 
@@ -1226,7 +1226,7 @@ class PixelTUI:
             push("", "\n")
 
             n = len(s.menu)
-            help_extra = "  \u2022  <S-arrows> <PgUp/Dn> scroll" if s.result_ascii else ""
+            help_extra = "  \u2022  Shift+arrows  \u2022  PgUp/Dn jump" if s.result_ascii else ""
             push("#585858 italic", f"\u2191\u2193  navigate  \u2022  Enter  select  \u2022  1-{n}  shortcut{help_extra}  \u2022  q  quit")
             push("#585858 italic", "\n")
         else:
