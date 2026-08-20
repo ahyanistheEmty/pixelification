@@ -126,11 +126,34 @@ Merge `audio_settings` into the config file and rewrite it.
 ### Image engine
 
 - `compute_sort_keys(img, xp=np) -> (lum, hue, sat)` — per-pixel sort keys.
+- `rearrange_pixels(img_src, img_tgt, xp=None) -> np.ndarray` — sort-map every
+  source pixel onto the target's layout (BGR, source dims). Shared by the CLI
+  still export, the live preview and the animation generator.
 - `_compute_rearrangement(source_path, target_path) -> np.ndarray` — returns the
   rearranged BGR image (target resized to source dims).
 - `rearrange(source_path, target_path, state) -> None` — TUI variant; plays the
-  60-frame animation in an OpenCV window.
+  60-frame animation in an OpenCV window (driven by `generate_animation_frames`).
 - `get_screen_resolution() -> (w, h)` — best-effort screen size.
+
+### Animation engine
+
+- `ease(t: float, mode: str = "linear") -> float` — map a `0..1` progress value
+  through a curve; `mode` ∈ `"linear" | "ease-in-out" | "ease-out"`.
+- `default_animation_path(src_stem, tgt_stem, suffix=".mp4") -> str` — returns
+  `anim_{src_stem}_from_{tgt_stem}{suffix}`.
+- `generate_animation_frames(img_src, img_tgt, out_img, *, num_frames=60,
+  display_size=None, include_final_hold=12, ease_mode="linear", three_panel=False,
+  xp=None) -> Iterator[np.ndarray]` — generate the pixel-slide animation as
+  BGR uint8 frames. A generator/stream so full-resolution exports never buffer the
+  whole clip in RAM; `display_size=(w, h)` downsamples (used by the live preview,
+  `None` = full source size); the last `include_final_hold` frames are static
+  copies of `out_img`; `three_panel=True` composes Source · Target · Reconstruction
+  panels with labels. Uses the same CUDA/CPU helpers (`xp_scatter_add`, …) as the
+  rest of the tool.
+- `write_animation(frames, path, *, fps=30.0, codec=None) -> str` — stream BGR
+  uint8 frames to a file. `.mp4` → `cv2.VideoWriter` (`mp4v`); `.webm` → `VP90`
+  if the build supports it; `.gif` → Pillow (optional, loads all frames).
+  Raises a clear error if the writer cannot open.
 
 ### Video engine
 
@@ -175,7 +198,9 @@ The terminal application. Constructor restores persisted `audio_settings`.
   `_commit_setting_edit`, `_cancel_setting_edit`, `_reset_audio_settings`,
   `_persist_audio_settings`.
 - Saves: `_save_result`, `_save_result_video`, `_save_result_audio`,
-  `_save_result_ascii`, `_copy_result_ascii`; preview: `_play_result_audio`.
+  `_save_result_ascii`, `_save_animation` (regenerates and streams the pixel-slide
+  to `anim_{src}_from_{tgt}.mp4` in cwd), `_copy_result_ascii`; preview:
+  `_play_result_audio`.
 - Rendering: `_build_text` (per-screen text), `_build_layout`, `_invalidate`,
   `_refresh_info` (shows dimensions/sample rate in the status area).
 - Cleanup: `_quit` (removes temp result files, exits).
@@ -204,4 +229,21 @@ s.seed = 7
 s.dry_wet = 0.3
 
 rearrange_audio("vocal.wav", "pad.flac", "out.wav", settings=s)
+```
+
+### Animation scripting example
+
+```python
+import cv2
+import numpy as np
+from pixelification.main import generate_animation_frames, write_animation
+
+src = cv2.imread("city.png", cv2.IMREAD_COLOR)
+tgt = cv2.imread("ocean.png", cv2.IMREAD_COLOR)
+
+frames = generate_animation_frames(
+    src, tgt, out_img=None,          # out_img=None computes the final reconstruction
+    num_frames=60,
+)
+write_animation(frames, "morph.mp4", fps=30)
 ```

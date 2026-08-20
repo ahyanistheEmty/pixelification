@@ -18,6 +18,7 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 from importlib.metadata import version, PackageNotFoundError
 
 from prompt_toolkit import Application
@@ -268,6 +269,7 @@ class State:
         ("Select Target Image",   "choose the image whose layout will be approximated"),
         ("Run Rearrangement",     "execute the sort-based pixel-matching algorithm"),
         ("Save Result Image",     "save the reconstructed image to disk"),
+        ("Save Animation",        "export the pixel-slide animation to an mp4 file"),
         ("Back to Main Menu",     "return to mode selection"),
         ("Quit",                  "exit the application"),
     ]
@@ -354,6 +356,28 @@ def compute_sort_keys(img, xp=np):
     return lum, hsv[:, 0], hsv[:, 1]
 
 
+def rearrange_pixels(img_src: np.ndarray, img_tgt: np.ndarray, xp=None) -> np.ndarray:
+    """Sort-map every source pixel onto the target's layout (BGR, source dims).
+
+    Shared by the CLI still export, the live TUI preview and the animation
+    generator, so every path produces identical results.
+    """
+    if xp is None:
+        xp = get_xp()
+    h, w = img_src.shape[:2]
+    if img_tgt.shape[:2] != (h, w):
+        img_tgt = cv2.resize(img_tgt, (w, h))
+
+    s_l, s_h, s_s = compute_sort_keys(img_src, xp)
+    t_l, t_h, t_s = compute_sort_keys(img_tgt, xp)
+    s_order = xp_lexsort((s_s, s_h, s_l), xp)
+    t_order = xp_lexsort((t_s, t_h, t_l), xp)
+
+    out_flat = xp.empty_like(xp.array(img_src.reshape(-1, 3)), dtype=xp.uint8)
+    out_flat[t_order] = xp.array(img_src.reshape(-1, 3))[s_order]
+    return to_np(out_flat.reshape(h, w, 3))
+
+
 def _compute_rearrangement(source_path: str, target_path: str) -> np.ndarray:
     img_src = cv2.imread(source_path, cv2.IMREAD_COLOR)
     img_tgt = cv2.imread(target_path, cv2.IMREAD_COLOR)
@@ -362,21 +386,207 @@ def _compute_rearrangement(source_path: str, target_path: str) -> np.ndarray:
     if img_tgt is None:
         raise FileNotFoundError(f"Cannot read target: {target_path}")
 
-    h, w = img_src.shape[:2]
-    img_tgt = cv2.resize(img_tgt, (w, h))
+    return rearrange_pixels(img_src, img_tgt, get_xp())
 
-    xp = get_xp()
+
+# ── Animation Engine ────────────────────────────────────────────────
+
+EASE_MODES = ("linear", "ease-in-out", "ease-out")
+
+
+def ease(t: float, mode: str = "linear") -> float:
+    """Map a 0..1 progress value through an easing curve."""
+    if mode == "ease-in-out":
+        return t * t * (3 - 2 * t)  # smoothstep
+    if mode == "ease-out":
+        return 1 - (1 - t) ** 2
+    return t
+
+
+def default_animation_path(src_stem: str, tgt_stem: str, suffix: str = ".mp4") -> str:
+    if not suffix.startswith("."):
+        suffix = "." + suffix
+    return f"anim_{src_stem}_from_{tgt_stem}{suffix}"
+
+
+def generate_animation_frames(
+    img_src: np.ndarray,
+    img_tgt: np.ndarray,
+    out_img: np.ndarray,
+    *,
+    num_frames: int = 60,
+    display_size: tuple[int, int] | None = None,  # (w, h) or None = full res
+    include_final_hold: int = 12,  # extra static frames of the final image
+    ease_mode: str = "linear",     # "linear" | "ease-in-out" | "ease-out"
+    three_panel: bool = False,     # Source | Target | Reconstruction
+    xp=None,
+) -> Iterator[np.ndarray]:
+    """Yield the pixel-slide animation as BGR uint8 frames (headless).
+
+    A generator that streams one frame at a time so a full-resolution export
+    never materialises the whole animation in RAM. Default resolution is the
+    full source size; ``display_size`` downscales (used by the live preview).
+    The final ``include_final_hold`` frames are static copies of ``out_img``.
+    """
+    if xp is None:
+        xp = get_xp()
+    if ease_mode not in EASE_MODES:
+        raise ValueError(f"ease_mode must be one of {EASE_MODES}, got {ease_mode!r}")
+    if num_frames < 1:
+        raise ValueError("num_frames must be >= 1")
+    if include_final_hold < 0:
+        raise ValueError("include_final_hold must be >= 0")
+
+    h, w = img_src.shape[:2]
+    if img_tgt.shape[:2] != (h, w):
+        img_tgt = cv2.resize(img_tgt, (w, h))
+    if out_img is None:
+        out_img = rearrange_pixels(img_src, img_tgt, xp)
+    elif out_img.shape[:2] != (h, w):
+        out_img = cv2.resize(out_img, (w, h))
+
+    if display_size is not None:
+        iw, ih = int(display_size[0]), int(display_size[1])
+    else:
+        iw, ih = w, h
+    iw, ih = max(iw, 1), max(ih, 1)
+
+    src_rs = cv2.resize(img_src, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
+    out_rs = cv2.resize(out_img, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
+
+    total = h * w
     s_l, s_h, s_s = compute_sort_keys(img_src, xp)
     t_l, t_h, t_s = compute_sort_keys(img_tgt, xp)
     s_order = xp_lexsort((s_s, s_h, s_l), xp)
     t_order = xp_lexsort((t_s, t_h, t_l), xp)
+    forward = xp.empty(total, dtype=xp.int32)
+    forward[s_order] = t_order
 
-    out_flat = xp.empty_like(xp.array(img_src.reshape(-1, 3)), dtype=xp.uint8)
-    out_flat[t_order] = xp.array(img_src.reshape(-1, 3))[s_order]
-    out_img = out_flat.reshape(h, w, 3)
-    out_img = to_np(out_img)
+    scx = iw / w
+    scy = ih / h
 
-    return out_img
+    s_idx_x = (np.arange(iw, dtype=np.float32) * w / iw).clip(0, w - 1).round().astype(np.int32)
+    s_idx_y = (np.arange(ih, dtype=np.float32) * h / ih).clip(0, h - 1).round().astype(np.int32)
+    gx, gy = np.meshgrid(s_idx_x, s_idx_y)
+    src_lin = gy * w + gx
+    if xp is not np:
+        src_lin = xp.array(src_lin)
+
+    tgt_lin = forward[src_lin]
+    tgt_dx = (tgt_lin % w).astype(xp.float32) * scx
+    tgt_dy = (tgt_lin // w).astype(xp.float32) * scy
+    src_dx = xp.array(gx.astype(np.float32) * scx)
+    src_dy = xp.array(gy.astype(np.float32) * scy)
+    colors = xp.array(src_rs.reshape(-1, 3).astype(np.float32))
+
+    if three_panel:
+        tgt_rs = cv2.resize(img_tgt, (iw, ih), interpolation=cv2.INTER_LANCZOS4)
+        label_h = 22
+        canvas_w = iw * 3
+        canvas_h = ih + label_h
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        def compose(recon: np.ndarray) -> np.ndarray:
+            canvas = np.full((canvas_h, canvas_w, 3), 32, dtype=np.uint8)
+            canvas[label_h:, 0:iw] = src_rs
+            canvas[label_h:, iw:2 * iw] = tgt_rs
+            canvas[label_h:, 2 * iw:3 * iw] = recon
+            for label, xo in [("Source", 0), ("Target", iw), ("Reconstruction", 2 * iw)]:
+                cv2.rectangle(canvas, (xo, 0), (xo + iw, label_h), (0, 0, 0), -1)
+                cv2.putText(canvas, label, (xo + 6, 16), font, 0.45, (200, 200, 200), 1)
+            return canvas
+    else:
+        def compose(recon: np.ndarray) -> np.ndarray:
+            return recon
+
+    for fi in range(num_frames):
+        t = ease((fi + 1) / num_frames, ease_mode)
+
+        curr_x = xp.clip((1 - t) * src_dx.ravel() + t * tgt_dx.ravel(), 0, iw - 1)
+        curr_y = xp.clip((1 - t) * src_dy.ravel() + t * tgt_dy.ravel(), 0, ih - 1)
+        rx = xp.round(curr_x).astype(xp.int32)
+        ry = xp.round(curr_y).astype(xp.int32)
+
+        accum = xp.zeros((ih, iw, 3), dtype=xp.float32)
+        cnt = xp.zeros((ih, iw), dtype=xp.float32)
+        accum = xp_scatter_add(accum, (ry, rx), colors, xp)
+        cnt = xp_scatter_add(cnt, (ry, rx), 1.0, xp)
+
+        mask = cnt > 0
+        accum[mask] /= cnt[mask, None]
+
+        res_frame = to_np(accum).astype(np.uint8)
+        yield compose(res_frame)
+
+    for _ in range(include_final_hold):
+        yield compose(out_rs)
+
+
+def _write_gif(frames, path: str, fps: float) -> str:
+    try:
+        from PIL import Image
+    except ImportError:
+        raise RuntimeError("GIF export needs Pillow — install it with `uv pip install pillow`")
+    duration = max(1, int(round(1000.0 / fps)))
+    imgs = []
+    for frame in frames:
+        imgs.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+    if not imgs:
+        raise ValueError("write_animation got an empty frame iterable")
+    imgs[0].save(path, save_all=True, append_images=imgs[1:], duration=duration, loop=0)
+    return path
+
+
+def write_animation(
+    frames,
+    path: str,
+    *,
+    fps: float = 30.0,
+    codec: str | None = None,
+) -> str:
+    """Stream an iterable of BGR uint8 frames into an animation file.
+
+    .mp4  → ``cv2.VideoWriter`` with ``mp4v`` (no extra dependencies).
+    .webm → ``cv2.VideoWriter`` with ``VP90`` (only if the OpenCV/ffmpeg
+            build supports it; raises a clear error otherwise).
+    .gif  → Pillow (optional dependency; loads all frames into memory).
+    """
+    path = str(path)
+    suffix = Path(path).suffix.lower()
+
+    if suffix == ".gif":
+        return _write_gif(frames, path, fps=fps)
+
+    if suffix == ".webm":
+        codec = codec or "VP90"
+    else:
+        codec = codec or "mp4v"
+    if len(codec) != 4:
+        raise ValueError(f"codec must be a 4-char tag, got {codec!r}")
+
+    first = None
+    for frame in frames:
+        first = frame
+        break
+    if first is None:
+        raise ValueError("write_animation got an empty frame iterable")
+
+    h, w = first.shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*codec)
+    writer = cv2.VideoWriter(path, fourcc, float(fps), (w, h))
+    if not writer.isOpened():
+        raise RuntimeError(
+            f"could not open video writer for {path!r} (codec {codec!r}); "
+            "use .mp4 (mp4v) or install ffmpeg with VP9 support"
+        )
+
+    writer.write(first)
+    for frame in frames:
+        if frame.shape[:2] != (h, w):
+            frame = cv2.resize(frame, (w, h))
+        writer.write(frame)
+    writer.release()
+    return path
 
 
 def get_screen_resolution():
@@ -420,15 +630,7 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         img_tgt = cv2.resize(img_tgt, (w, h))
 
         xp = get_xp()
-        s_l, s_h, s_s = compute_sort_keys(img_src, xp)
-        t_l, t_h, t_s = compute_sort_keys(img_tgt, xp)
-        s_order = xp_lexsort((s_s, s_h, s_l), xp)
-        t_order = xp_lexsort((t_s, t_h, t_l), xp)
-
-        out_flat = xp.empty_like(xp.array(img_src.reshape(-1, 3)), dtype=xp.uint8)
-        out_flat[t_order] = xp.array(img_src.reshape(-1, 3))[s_order]
-        out_img = out_flat.reshape(h, w, 3)
-        out_img = to_np(out_img)
+        out_img = rearrange_pixels(img_src, img_tgt, xp)
 
         sw, sh = get_screen_resolution()
         canvas = np.full((sh, sw, 3), 32, dtype=np.uint8)
@@ -461,50 +663,14 @@ def rearrange(source_path: str, target_path: str, state: State) -> None:
         cv2.imshow(wn, canvas)
         cv2.waitKey(300)
 
-        total = h * w
-        forward = xp.empty(total, dtype=xp.int32)
-        forward[s_order] = t_order
-
-        scx = iw / w
-        scy = ih / h
-
-        s_idx_x = (np.arange(iw, dtype=np.float32) * w / iw).clip(0, w - 1).round().astype(np.int32)
-        s_idx_y = (np.arange(ih, dtype=np.float32) * h / ih).clip(0, h - 1).round().astype(np.int32)
-        gx, gy = np.meshgrid(s_idx_x, s_idx_y)
-        src_lin = gy * w + gx
-
-        if xp is not np:
-            src_lin = xp.array(src_lin)
-
-        tgt_lin = forward[src_lin]
-        tgt_dx = (tgt_lin % w).astype(xp.float32) * scx
-        tgt_dy = (tgt_lin // w).astype(xp.float32) * scy
-
-        src_dx = xp.array(gx.astype(np.float32) * scx)
-        src_dy = xp.array(gy.astype(np.float32) * scy)
-
-        colors = xp.array(src_s.reshape(-1, 3).astype(np.float32))
-
-        num_frames = 60
-        for fi in range(num_frames):
-            t = (fi + 1) / num_frames
-
-            curr_x = xp.clip((1 - t) * src_dx.ravel() + t * tgt_dx.ravel(), 0, iw - 1)
-            curr_y = xp.clip((1 - t) * src_dy.ravel() + t * tgt_dy.ravel(), 0, ih - 1)
-            rx = xp.round(curr_x).astype(xp.int32)
-            ry = xp.round(curr_y).astype(xp.int32)
-
-            accum = xp.zeros((ih, iw, 3), dtype=xp.float32)
-            cnt = xp.zeros((ih, iw), dtype=xp.float32)
-            
-            accum = xp_scatter_add(accum, (ry, rx), colors, xp)
-            cnt = xp_scatter_add(cnt, (ry, rx), 1.0, xp)
-                
-            mask = cnt > 0
-            accum[mask] /= cnt[mask, None]
-
-            res_frame = to_np(accum).astype(np.uint8)
-            
+        for res_frame in generate_animation_frames(
+            img_src, img_tgt, out_img,
+            num_frames=60,
+            display_size=(iw, ih),
+            include_final_hold=0,
+            ease_mode="linear",
+            xp=xp,
+        ):
             rec_region[:] = res_frame
             cv2.imshow(wn, canvas)
             if cv2.waitKey(25) & 0xFF in (27, ord("q")):
@@ -940,6 +1106,39 @@ def _cli_img2img(args):
         cv2.imwrite(out_path, result)
         print(out_path)
 
+        if args.anim:
+            src_stem = Path(args.source).stem
+            tgt_stem = Path(args.target).stem
+            if args.anim is True:
+                anim_path = default_animation_path(src_stem, tgt_stem)
+            else:
+                anim_path = str(args.anim)
+                if not Path(anim_path).suffix:
+                    anim_path += ".mp4"
+
+            img_src = cv2.imread(args.source, cv2.IMREAD_COLOR)
+            img_tgt = cv2.imread(args.target, cv2.IMREAD_COLOR)
+            if img_src is None or img_tgt is None:
+                print("Error: could not reload images for animation", file=sys.stderr)
+                sys.exit(1)
+
+            scale = args.anim_scale if (args.anim_scale and args.anim_scale > 0) else 1.0
+            display_size = None
+            if scale != 1.0:
+                h, w = img_src.shape[:2]
+                display_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+
+            frames = generate_animation_frames(
+                img_src, img_tgt, result,
+                num_frames=args.anim_frames,
+                display_size=display_size,
+                include_final_hold=args.anim_hold,
+                ease_mode=args.anim_ease,
+                three_panel=args.anim_panels,
+            )
+            write_animation(frames, anim_path, fps=args.anim_fps)
+            print(anim_path)
+
         if args.show:
             img_src = cv2.imread(args.source, cv2.IMREAD_COLOR)
             img_tgt = cv2.imread(args.target, cv2.IMREAD_COLOR)
@@ -1288,8 +1487,9 @@ class PixelTUI:
              1: self._select_target,
              2: self._run,
              3: self._save_result,
-             4: self._back_to_main,
-             5: self._quit}[idx]()
+             4: self._save_animation,
+             5: self._back_to_main,
+             6: self._quit}[idx]()
         elif s == "video":
             {0: self._select_source_video,
              1: self._select_target_video,
@@ -1835,6 +2035,56 @@ class PixelTUI:
         self.state.status_style = "status"
         self._invalidate()
 
+    def _save_animation(self):
+        if not self.state.source or not self.state.target:
+            self.state.status = "Select source and target images first!"
+            self.state.status_style = "status-error"; self._invalidate(); return
+        if self.state.result is None or not self.state.done:
+            self.state.status = "No result to save \u2014 run rearrangement first!"
+            self.state.status_style = "status-error"; self._invalidate(); return
+
+        src_stem = Path(self.state.source).stem
+        tgt_stem = Path(self.state.target).stem
+        out_path = Path.cwd() / default_animation_path(src_stem, tgt_stem)
+
+        self.state.running = True
+        self.state.status = "Saving animation\u2026"
+        self.state.status_style = "status-warn"
+        self._invalidate()
+
+        def work():
+            try:
+                img_src = cv2.imread(self.state.source, cv2.IMREAD_COLOR)
+                img_tgt = cv2.imread(self.state.target, cv2.IMREAD_COLOR)
+                if img_src is None or img_tgt is None:
+                    raise IOError("could not reload source/target images")
+                frames = generate_animation_frames(
+                    img_src, img_tgt, self.state.result,
+                    num_frames=60,
+                    include_final_hold=12,
+                    ease_mode="linear",
+                )
+                write_animation(frames, str(out_path), fps=30.0)
+                self.state.status = f"Saved animation to {out_path}"
+                self.state.status_style = "status"
+            except Exception as e:
+                self.state.status = f"Animation error: {e}"
+                self.state.status_style = "status-error"
+            self.state.running = False
+            self._invalidate()
+
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+
+        async def waiter():
+            while t.is_alive():
+                await asyncio.sleep(0.5)
+                self._invalidate()
+            self._invalidate()
+
+        if self._app:
+            asyncio.create_task(waiter())
+
     def _save_result_video(self):
         src_stem = Path(self.state.source).stem
         tgt_stem = Path(self.state.target).stem
@@ -2063,7 +2313,8 @@ class PixelTUI:
                 sel = i == s.cursor
                 is_play = s.screen == "audio" and i == 4
                 is_save = (s.screen in ("image", "video") and i == 3) or (s.screen == "audio" and i == 5)
-                disabled = (is_play or is_save) and not s.done
+                is_anim = s.screen == "image" and i == 4
+                disabled = (is_play or is_save or is_anim) and not s.done
                 st = ("bold #000000 bg:#00d787" if sel else
                       "#585858 italic" if disabled else
                       "bold #ffffff")
@@ -2149,6 +2400,20 @@ def main():
     p_img2img.add_argument("-o", "--output", help="output image path (default: auto-named)")
     p_img2img.add_argument("--show", action="store_true", help="show the result in an OpenCV window")
     p_img2img.add_argument("--cpu", action="store_true", help="force CPU mode")
+    p_img2img.add_argument("--anim", nargs="?", const=True, default=None, metavar="PATH",
+                           help="also export the pixel-slide animation (optional path; default: anim_<src>_from_<tgt>.mp4)")
+    p_img2img.add_argument("--anim-frames", type=int, default=60,
+                           help="animation frame count (default: 60)")
+    p_img2img.add_argument("--anim-fps", type=float, default=30.0,
+                           help="animation frames per second (default: 30)")
+    p_img2img.add_argument("--anim-scale", type=float, default=1.0,
+                           help="export resolution scale relative to source (default: 1.0 = full resolution)")
+    p_img2img.add_argument("--anim-ease", choices=["linear", "ease-in-out", "ease-out"],
+                           default="linear", help="motion easing (default: linear)")
+    p_img2img.add_argument("--anim-hold", type=int, default=12,
+                           help="extra static frames of final image at the end (default: 12)")
+    p_img2img.add_argument("--anim-panels", action="store_true",
+                           help="render Source | Target | Reconstruction panels in the export")
 
     p_vid2vid = sub.add_parser("vid2vid", help="rearrange frames between two videos (or image->video)")
     p_vid2vid.add_argument("source", help="source video or image path")

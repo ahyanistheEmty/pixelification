@@ -47,15 +47,30 @@ The result is written as an image (the source's dimensions).
 | `-o, --output FILE` | auto | output path; auto-names `reconstructed_{src}_from_{tgt}.png` |
 | `--show` | off | open an OpenCV window (Source · Target · Reconstruction) after saving |
 | `--cpu` | off | force CPU-only (ignore CuPy) |
+| `--anim [PATH]` | off | also export the pixel-slide animation; `PATH` is optional and auto-names `anim_{src}_from_{tgt}.mp4` |
+| `--anim-frames N` | `60` | animation length in frames |
+| `--anim-fps F` | `30` | animation frame rate (frames/second) |
+| `--anim-scale S` | `1.0` | export resolution scale relative to the source (`1.0` = full resolution; `0.5` = half) |
+| `--anim-ease MODE` | `linear` | motion easing: `linear` \| `ease-in-out` \| `ease-out` |
+| `--anim-hold N` | `12` | extra static frames of the final image appended at the end |
+| `--anim-panels` | off | render Source · Target · Reconstruction panels side by side in the export |
 
 **Supported extensions:** `.png .jpg .jpeg .bmp .tiff .gif .webp`
+
+Animation export is fully headless — it streams frames straight into a
+`cv2.VideoWriter` (`mp4v`) and never opens a window. `.webm` is attempted with the
+`VP90` codec when supported; `.gif` needs the optional `Pillow` dependency. If the
+writer cannot open (e.g. missing codec), an explicit error is raised.
 
 Example:
 
 ```bash
 pixelification img2img city.png ocean.png --show
 # writes reconstructed_city_from_ocean.png
-```
+
+pixelification img2img city.png ocean.png --anim cityslide.mp4 --anim-frames 90 \
+    --anim-ease ease-in-out --anim-hold 15 --anim-panels
+# also writes cityslide.mp4 (90 eased frames + 15-frame hold, three panels)
 
 ---
 

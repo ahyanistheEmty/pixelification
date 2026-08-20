@@ -232,7 +232,10 @@ A keyboard-navigated menu opens:
 2. Select your target image
 3. Watch the rearrangement play out in an OpenCV window — three panels: **Source · Target · Reconstruction**
 4. Press `ESC` or `q` to quit the animation
-5. Click **"Save Result Image"** to export a PNG
+5. Click **"Save Result Image"** to export a PNG, or **"Save Animation"** to export the pixel-slide as `anim_<src>_from_<tgt>.mp4`
+   (the animation export needs no display — it streams frames straight to a `VideoWriter`)
+
+> Animation exports are also available headlessly from the CLI: `pixelification img2img a.png b.png --anim mocher.mp4`.
 
 ### Video Mode
 
@@ -280,10 +283,19 @@ Output paths default to auto-named files in the current directory (e.g. `reconst
 ```
 pixelification img2img <source> <target>
   Rearrange pixels from a source image to approximate a target image.
+  Also exports the 60-frame pixel-slide as a video with --anim.
 
   -o, --output FILE    output image path (default: auto-named)
   --show               open an OpenCV window with the result
   --cpu                force CPU-only mode
+  --anim [PATH]        also export the pixel-slide animation as .mp4
+                       (optional path; auto-names anim_<src>_from_<tgt>.mp4)
+  --anim-frames N      animation length in frames (default: 60)
+  --anim-fps F         animation frame rate (default: 30)
+  --anim-scale S       export resolution scale (default: 1.0 = full res)
+  --anim-ease MODE     linear | ease-in-out | ease-out (default: linear)
+  --anim-hold N        extra static frames of the final image (default: 12)
+  --anim-panels        render Source | Target | Reconstruction panels in the export
 
 pixelification vid2vid <source> <target>
   Rearrange every frame of a source (video or still image) to match

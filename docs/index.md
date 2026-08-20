@@ -23,6 +23,7 @@ pixelification
 
 # Or use the command line directly
 pixelification img2img  photo.png  painting.png
+pixelification img2img  photo.png  painting.png --anim  slide.mp4   # + pixel-slide video
 pixelification vid2vid  clip.mp4   dream.mp4
 pixelification img2ascii photo.jpg --width 100
 pixelification aud2aud  vocal.wav  pad.flac
@@ -50,6 +51,7 @@ See [installation.md](installation.md) for full install options.
 | Feature | Where |
 |---|---|
 | Rearrange image pixels → image | TUI **Image Mode** · `pixelification img2img` |
+| Export the pixel-slide animation → `.mp4` | TUI **Image Mode → Save Animation** · `img2img --anim` (headless) |
 | Rearrange video frames → video | TUI **Video Mode** · `pixelification vid2vid` |
 | Rearrange audio segments / spectra | TUI **Audio Mode** · `pixelification aud2aud` |
 | Image → ASCII art | TUI **ASCII Mode** · `pixelification img2ascii` |
